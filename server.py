@@ -1,0 +1,815 @@
+#!/usr/bin/env python3
+"""mcp-screen v0.9 — modular MCP server: see + drive the desktop.
+
+Thin MCP stdio loop wiring the modules:
+  state      session/portal plumbing
+  capture    persistent PipeWire capture, per-monitor crops, encode (view-space)
+  input      pointer/keyboard via RemoteDesktop portal (per-stream logical coords)
+  grounding  optional Set-of-Marks (OCR + icons) annotation
+  awareness  focused-window / window-list (GNOME Shell ext + AT-SPI fallback)
+  reliability stable-frame / verify / action log
+  recorder   session record + replay
+
+Coordinate model: every screenshot downscales to the model's native image size and
+the server stores the view->desktop transform; click/type use space='view' (default)
+with the pixel coords you see. No monitor guessing.
+
+OPS NOTES (hard-won; read before changing capture/input/cursor code):
+  * Hot-reload: screen_reload re-execs in place (os.execv) — picks up code edits AND new
+    tools (via notifications/tools/list_changed) with NO /mcp reconnect. Use it after edits.
+  * screen_diag dumps live session/geo/cursor/grounding health — reach for it first when
+    something's off. Keep it; don't treat diagnostics as throwaway scaffolding.
+  * Fractional scaling: NotifyPointerMotionAbsolute coords are LOGICAL and LOCAL to each
+    stream (0..monitor_logical_size), keyed by node_id. Do NOT add a global logical origin
+    or the portal clamps ("Invalid position"). See input.global_to_logical.
+  * Cursor position: cursor_mode=METADATA(4) (state.py) means the cursor is NOT baked into
+    frames; pipewiresrc attaches it as a "cursor" ROI meta on its SRC pad. videoconvert
+    STRIPS that meta, and PyGObject can't downcast it anyway — so capture.py reads it with a
+    ctypes pad-probe on the pipewiresrc src pad (offsets are x86-64). We composite a marker
+    back into plain screenshots so the pointer stays visible.
+  * User-takeover guard: input.guard_user compares the live pointer to where WE last
+    commanded it (cmd_cursor); >GUARD_THRESH px ⇒ the user grabbed the mouse ⇒ STOP. Pass
+    force=true to bypass / take control back. Our own moves keep cmd_cursor in sync so they
+    never trip it. Fails open if the cursor can't be read.
+  * GPU is hard-disabled (CUDA_VISIBLE_DEVICES="" below); grounding is CPU-only by design.
+  * Unicode typing: the portal keysym path drops non-ASCII, so input.type_text auto-pastes
+    any non-ASCII string via wl-copy + Ctrl+V (clipboard saved/restored). DEPENDENCY:
+    `wl-clipboard` (pacman) — falls back to ASCII-only keysyms if absent. ASCII still uses
+    keysyms (no clipboard pollution). xdotool/XTEST can NOT reach native-Wayland apps.
+  * On any tool exception the dispatcher writes the full traceback to /tmp/screen_err.txt
+    (the JSON-RPC error only carries the message) — read it to debug crashes.
+  * Self-learning (Sense->Remember->Act), all CPU-only, fail-open, ambient on every call:
+      sense.py      per-frame signals (settle/activity, scroll-from-pair, element diff with
+                    stable fingerprints, modal detect) off a 1-frame history in SESSION['sense'];
+                    surfaced as the `SENSE` hint block appended by _sense_block.
+      worldmodel.py write-through element cache keyed by tolerant dHash + window context (sqlite
+                    at ~/.local/share/mcp-screen/world/map.db). observe() learns on every
+                    annotate; recall() (use_cache=true) returns cached elements to skip OCR;
+                    a missed element-click penalize()s and self-heals stale coords.
+      autoloop.py   scroll_to_reveal (screen_read_page): one call reads a whole scrollable view,
+                    guard re-checked each iteration. Deterministic reflexes live here, NOT an LLM.
+"""
+import sys, os, json, time
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # hard no-GPU: grounding is CPU-only
+import state, capture, input as inp, grounding, awareness, reliability, recorder, sense, worldmodel, autoloop
+
+REC = recorder.REC
+
+__version__ = "1.3.2"
+MAX_WAIT_MS = int(os.environ.get("MCP_SCREEN_MAX_WAIT_MS", "30000"))
+
+def _txt(s):
+    return {"type": "text", "text": s}
+
+def _sense_block(raw_img, elements_list, post_action=False):
+    """Ambient self-learning: diff this frame against the last one the agent saw and append
+    a compact SENSE signal + human hint so it adapts WITHOUT being told (new buttons appeared,
+    a modal opened, the click did nothing). Then stash this frame as the new baseline.
+    `post_action` gates the no-op/misclick hint (only meaningful right after an action).
+    Returns a content text item or None. Fail-open + env kill-switch MCP_SCREEN_AMBIENT=0."""
+    if os.environ.get("MCP_SCREEN_AMBIENT") == "0":
+        return None
+    try:
+        view = state.SESSION.get("view")
+        sig = sense.compute(raw_img, view, elements_list)
+        sense.stash(raw_img, view, elements_list)
+    except Exception:
+        return None
+    parts = []
+    ch = sig.get("change") if sig else None
+    if ch and ch.get("new_count"):
+        labels = [repr(e.get("label") or e.get("role")) for e in ch.get("new", []) if (e.get("label") or e.get("role"))][:3]
+        parts.append(f"{ch['new_count']} new element(s)" + (": " + ", ".join(labels) if labels else "")
+                     + (f"; {ch['removed']} removed" if ch.get("removed") else ""))
+    ov = sig.get("overlay") if sig else None
+    if ov and ov.get("present"):
+        parts.append(f"a {ov['kind']} opened (region {ov.get('region')}) — deal with it first")
+    st = sig.get("settle") if sig else None
+    if post_action and st and st.get("activity") == "none":
+        parts.append("nothing changed — last action may have been a no-op/misclick")
+    if not parts:
+        return None
+    return _txt("SENSE " + json.dumps(sig, separators=(",", ":")) + "\nhints: " + "; ".join(parts))
+
+def _maybe_shot(args, content, _t0):
+    """Append a post-action screenshot if shot=true (defaults to re-showing last view area)."""
+    if not args.get("shot"):
+        return content
+    settle = min(MAX_WAIT_MS, float(args.get("settle", 350))) / 1000.0
+    if settle > 0:
+        time.sleep(settle)
+    region = args.get("region"); monitor = args.get("monitor")
+    if region is None and monitor is None and state.SESSION.get("view"):
+        v = state.SESSION["view"]; region = [v["ox"], v["oy"], v["dw"], v["dh"]]
+    ts = time.time()
+    # Default to a plain (cheap, non-disruptive) grab: an action that changed the screen already
+    # generated the damage that produces a current frame, so we rarely need to force one — and
+    # forcing nudges the pointer (visible flashing). Opt in with fresh=true only when you suspect
+    # the result shot is stale on a static monitor.
+    fresh = bool(args.get("fresh", False)) and args.get("settle") != 0 \
+        and os.environ.get("MCP_SCREEN_NO_FRESH") != "1"
+    img, ox, oy = capture.capture_desktop(region, monitor, fresh=fresh)
+    raw = img  # un-marked frame for ambient SENSE diffing (shows what the action changed)
+    try:
+        capture.cursor_pos(); img = capture.draw_cursor(img, ox, oy)
+    except Exception:
+        pass
+    shot = capture.encode_store(img, ox, oy, "after", ts)
+    sblock = _sense_block(raw, None, post_action=True)
+    if sblock:
+        shot = shot + [sblock]
+    if REC.active():
+        REC.log_frame(img, "after", state.SESSION.get("view"))
+    return content + shot
+
+def _verify(args, fn):
+    """Optional post-action verify: warn if a click/type produced no on-screen change."""
+    if not args.get("verify"):
+        return fn(args)
+    try:
+        x, y = inp.resolve_xy(args)
+        node, _, _ = inp.global_to_logical(x, y)
+    except Exception:
+        return fn(args)
+    try:
+        before = capture.grab(node)[2]
+    except Exception:
+        return fn(args)
+    res = fn(args)
+    reliability.wait_for_stable_frame(lambda n: capture.grab(n), node)
+    try:
+        after = capture.grab(node)[2]
+        m = next((g for g in state.SESSION["geo"] if g["node"] == node), None)
+        if m:
+            lx, ly = x - m["x"], y - m["y"]
+            bb = [max(0, lx - 80), max(0, ly - 80), 160, 160]
+            changed, _ = reliability.region_diff(before, after, bb)
+            if not changed:
+                res["content"].insert(0, _txt("WARN: no screen change near the click — likely a misclick or focus didn't transfer."))
+                if args.get("element") is not None:   # a cached coord missed -> self-heal THAT state's row
+                    try:
+                        worldmodel.MAP.penalize(state.SESSION.get("elements_state_id"))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return res
+
+# ---- tools ----
+def tool_screenshot(args):
+    t0 = time.time()
+    if args.get("regeo"):
+        capture.ensure_geo(force=True)
+    region = args.get("region"); monitor = args.get("monitor")
+    # App-agnostic anti-stale: if input was injected very recently, the UI may still be
+    # repainting. Settle the watched monitor before grabbing so we never return a pre-change
+    # or mid-transition frame (the root cause of misread "nothing happened" loops). Skippable
+    # via settle=0 or MCP_SCREEN_NO_AUTOSETTLE=1; bounded by _settle's own timeout.
+    li = state.SESSION.get("last_input_t")
+    recent_input = (li is not None and (time.monotonic() - li) < 1.5)
+    changed = False   # did the post-action change-gate actually SEE the screen change?
+    if (recent_input and args.get("settle") != 0
+            and os.environ.get("MCP_SCREEN_NO_AUTOSETTLE") != "1"):
+        try:
+            node = _watch_node(args)
+            base = state.SESSION.get("last_input_hash")
+            base_node = state.SESSION.get("last_input_node")
+            # First wait for the frame to actually CHANGE vs the pre-action baseline (defeats
+            # stale capture on a static monitor — a successful scroll/click is now SEEN), then
+            # settle to a steady end state. If no baseline, fall back to stable-settle alone.
+            if base is not None and base_node == node:
+                changed, _ = reliability.wait_for_changed_frame(lambda n: capture.grab(n), node, base,
+                                                                timeout=min(MAX_WAIT_MS / 1000.0, 2.5))
+            _settle(node, timeout=min(MAX_WAIT_MS / 1000.0, 2.0))
+        except Exception:
+            pass
+        state.SESSION["last_input_t"] = None   # consume: don't re-settle on the next shot
+        state.SESSION["last_input_hash"] = None
+    # Anti-stale freshness, used SPARINGLY: forcing a fresh frame nudges the pointer to generate
+    # a damage event (visible cursor movement / a recompose), so doing it on every screenshot
+    # makes the screen "flash" during active driving. Only force it when it's actually needed —
+    # right after an action whose effect the change-gate could NOT confirm (the genuinely-stuck
+    # static-monitor case where content changed but no frame was emitted). Pure observation shots
+    # (no recent input, or a change already seen) read the cached frame, which on static content
+    # is identical to "now" anyway. Explicit fresh=true forces it; settle=0 / MCP_SCREEN_NO_FRESH=1
+    # opt out.
+    fresh = args.get("fresh", recent_input and not changed)
+    fresh = bool(fresh) and args.get("settle") != 0 and os.environ.get("MCP_SCREEN_NO_FRESH") != "1"
+    try:
+        img, ox, oy = capture.capture_desktop(region, monitor, fresh=fresh)
+    except Exception as ex:
+        hint = capture.asleep_hint(monitor)
+        if hint:
+            return {"content": [_txt(hint)], "isError": True}
+        raise
+    raw = img  # keep the un-marked, cursor-free frame for ambient SENSE diffing + dHash
+    sense_elements = None
+    aware = "awareness: unavailable"
+    try:
+        aware = awareness.summary()
+    except Exception:
+        pass
+    view_ctx = [ox, oy, raw.width, raw.height]   # geometry key for the world-model
+    label = (f"Monitor {monitor}" if monitor is not None
+             else "Region" if region else f"Full desktop ({len(capture.ensure_geo())} mon)")
+    extra = []
+    if args.get("annotate"):
+        hit = worldmodel.MAP.recall(raw, aware, view_ctx) if args.get("use_cache") else None
+        if hit:                                  # known screen — reuse cached elements, skip OCR
+            store = hit["elements"]
+            state.SESSION["elements"] = store
+            state.SESSION["elements_state_id"] = hit.get("state_id")  # so a misclick self-heals THIS row
+            for eid in sorted(store):
+                e = store[eid]
+                extra.append(f"[{eid}] {e.get('role')} {e.get('label')!r} @ desktop({e['x']},{e['y']})")
+            extra.append(f"(world-model cache hit — skipped OCR, {len(store)} elements)")
+            try:
+                capture.cursor_pos(); img = capture.draw_cursor(img, ox, oy)
+            except Exception:
+                pass
+        else:
+            try:
+                marked, elements = grounding.annotate(img)
+                sense_elements = elements
+                img = marked
+                store = {}
+                for e in elements:
+                    x1, y1, x2, y2 = e["bbox"]
+                    cx, cy = ox + (x1 + x2) // 2, oy + (y1 + y2) // 2
+                    store[e["id"]] = {"x": cx, "y": cy, "label": e["label"], "role": e["role"]}
+                    extra.append(f"[{e['id']}] {e['role']} {e['label']!r} @ desktop({cx},{cy})")
+                state.SESSION["elements"] = store  # enables click-by-element-id (no coordinate guessing)
+                state.SESSION["elements_state_id"] = worldmodel.MAP.observe(raw, store, aware, view_ctx)  # learn + remember which row
+            except Exception as ex:
+                extra.append(f"(annotate failed: {ex})")
+    else:
+        try:                                   # cursor isn't baked into frames anymore — composite it
+            capture.cursor_pos(); img = capture.draw_cursor(img, ox, oy)
+        except Exception:
+            pass
+    content = capture.encode_store(img, ox, oy, label, t0)
+    content.insert(0, _txt("awareness: " + aware))
+    asleep = capture.asleep_hint(monitor)   # explain any black/sleeping monitor in this frame
+    if asleep:
+        content.append(_txt(asleep))
+    if extra:
+        content.append(_txt("elements (click the desktop() coords):\n" + "\n".join(extra)))
+    sblock = _sense_block(raw, sense_elements)
+    if sblock:
+        content.append(sblock)
+    if REC.active():
+        REC.log_frame(img, "screenshot", state.SESSION.get("view"))
+    return {"content": content}
+
+def tool_diag(args):
+    """Live health dump: session/geo, the cursor probe cache + guard state, grounding
+    backends. Permanent ops tool — first thing to check when capture/clicks/cursor act up."""
+    d = {
+        "version": __version__,
+        "session": {"started": bool(state.SESSION.get("handle")),
+                    "streams": len(state.SESSION.get("streams") or []),
+                    "geo": state.SESSION.get("geo"),
+                    "bounds": [state.SESSION.get("W"), state.SESSION.get("H")],
+                    "view": state.SESSION.get("view"),
+                    "elements_cached": len(state.SESSION.get("elements") or {})},
+        "cursor": capture.diag(),
+        "guard": {"cmd_cursor": state.SESSION.get("cmd_cursor"), "threshold_px": inp.GUARD_THRESH},
+        "uinput": inp.ui.diag(),
+        "grounding": grounding.diag(),
+        "world_model": worldmodel.MAP.stats(),
+    }
+    return {"content": [_txt(json.dumps(d, default=str, indent=2))]}
+
+def tool_list_monitors(args):
+    geo = capture.ensure_geo(force=bool(args.get("regeo")))
+    lines = [f"{i}: origin=({m['x']},{m['y']}) size={m['w']}x{m['h']} scale={m['sx']:g}"
+             for i, m in enumerate(geo)]
+    lines.append(f"desktop bounds: {state.SESSION['W']}x{state.SESSION['H']}")
+    try:
+        wins = awareness.list_windows()
+        if wins:
+            lines.append("windows: " + ", ".join(f"{w.get('app') or w.get('wm_class')}:{w.get('title','')[:30]}" for w in wins[:12]))
+    except Exception:
+        pass
+    return {"content": [_txt("\n".join(lines))]}
+
+_ACTIONS = {"move": inp.move, "click": inp.click, "scroll": inp.scroll,
+            "drag": inp.drag, "key": inp.key, "type": inp.type_text}
+
+def _resolve_element(args):
+    """If args has `element` (id from the last annotate=true shot), resolve it to exact
+    desktop coords — the agent clicks what the eyes detected, never a guessed pixel."""
+    eid = args.get("element")
+    if eid is None:
+        return args
+    el = (state.SESSION.get("elements") or {}).get(int(eid))
+    if not el:
+        raise RuntimeError(f"element {eid} not found; take a screenshot(annotate=true) first")
+    return {**args, "x": el["x"], "y": el["y"], "space": "desktop"}
+
+def _redact_args(name, args):
+    """Strip sensitive fields before audit-logging. The actions.jsonl lands on disk at
+    ~/.local/state/mcp-screen/ and `screen_type` text is frequently a password or token
+    — log a length placeholder instead of the literal characters."""
+    if name == "screen_type" and isinstance(args.get("text"), str):
+        return {**args, "text": f"<{len(args['text'])} chars redacted>"}
+    return args
+
+
+def _audit_node(args):
+    """Pick which monitor's frame to hash for the pre/post audit. Returns the node id
+    or None on failure. Uses the click target's monitor if coords are present, else the
+    same watch-node logic screen_wait uses (region/view center)."""
+    try:
+        if {"x", "y"} <= set(args):
+            x, y = inp.resolve_xy(args)
+            node, _, _ = inp.global_to_logical(x, y)
+            return node
+        return _watch_node(args)
+    except Exception:
+        return None
+
+
+def _click_bbox(node, args):
+    """Local bbox in node-frame px around the click point, for region_diff. None if no
+    coords (keyboard tools) or the monitor can't be found."""
+    if not ({"x", "y"} <= set(args)):
+        return None
+    try:
+        x, y = inp.resolve_xy(args)
+        m = next((g for g in (state.SESSION.get("geo") or []) if g["node"] == node), None)
+        if not m:
+            return None
+        lx, ly = x - m["x"], y - m["y"]
+        return [max(0, lx - 80), max(0, ly - 80), 160, 160]
+    except Exception:
+        return None
+
+
+def _do_focus(spec):
+    """Raise + keyboard-focus a window so injected keys/clicks land in it. `spec` is a window id
+    (int/str), an app name (str), or a dict {app?, title?, id?}. Tries the window-info extension's
+    ActivateWindow first (exact, fast); falls back to the GNOME overview (type the name) when the
+    extension isn't installed yet. Returns (ok: bool, detail: str). Never raises."""
+    if isinstance(spec, dict):
+        wid, app, title = spec.get("id"), spec.get("app"), spec.get("title")
+    elif isinstance(spec, (int, float)) or (isinstance(spec, str) and str(spec).isdigit()):
+        wid, app, title = spec, None, None
+    else:
+        wid, app, title = None, (spec or None), None
+    # Establish the portal session + desktop bounds first: focus may be the FIRST call after a
+    # reload/reconnect (before any screenshot), and input injection needs a live session handle
+    # (portal path) or known W/H (uinput path) — without it both backends fail.
+    try:
+        capture.ensure_geo()
+    except Exception:
+        pass
+    # Extension path (needs the user to have logged out/in once after install).
+    try:
+        if wid is None and (app or title):
+            w = awareness.find_window(app=app, title=title)
+            if w:
+                wid = w.get("id")
+        if wid is not None and awareness.activate_window(wid):
+            time.sleep(float(os.environ.get("MCP_SCREEN_FOCUS_SETTLE_MS", "150")) / 1000.0)
+            return True, f"focused window id={wid} via extension"
+    except Exception:
+        pass
+    # Fallback: overview search by name (no extension required; works today).
+    name = app or title or (str(wid) if wid is not None else None)
+    if name and inp.activate_via_overview(name):
+        return True, f"activated '{name}' via overview"
+    return False, "focus failed: window-info extension not loaded and no name to search"
+
+
+def tool_focus(args):
+    """screen_focus handler: focus a window before typing/clicking into it."""
+    spec = {"id": args.get("id"), "app": args.get("app"), "title": args.get("title")}
+    ok, detail = _do_focus(spec if (spec["id"] or spec["app"] or spec["title"]) else "")
+    return {"content": [_txt(detail)], "isError": not ok}
+
+
+def _action(name, fn, args):
+    """Reliability-wrapped action dispatch:
+      1. Resolve element-id -> coords.
+      2. User-takeover guard.
+      3. Populate _focused_app from awareness so the MCP_SCREEN_APPS allowlist works.
+      4. Ack gate (opt-in via MCP_SCREEN_GUARD=1) — blocks close-combos / destructive
+         keyword matches / out-of-allowlist actions unless `ack=<reason>` is passed.
+      5. Run the handler (with optional verify post-check).
+      6. Append a redacted record to the actions.jsonl audit log.
+      7. Optional auto-screenshot."""
+    t0 = time.time()
+    args = _resolve_element(args)
+    # Stale-view pre-check: if the caller bound coords to a superseded screenshot, reject up front
+    # (before any pointer motion / focus change) so a misbound click never lands on the wrong spot.
+    _pre = None
+    if {"x", "y"} <= set(args):
+        _pre = args
+    elif {"x1", "y1"} <= set(args):
+        _pre = {"x": args["x1"], "y": args["y1"], "space": args.get("space", "view"), "view_id": args.get("view_id")}
+    if _pre is not None:
+        try:
+            inp.resolve_xy(_pre)
+        except inp.StaleViewError as e:
+            return {"content": [_txt(f"STALE VIEW: {e}")], "isError": True}
+        except Exception:
+            pass
+    try:
+        inp.guard_user(args.get("force"))
+    except inp.UserControlError as e:
+        return {"content": [_txt(f"STOPPED: {e}")], "isError": True}
+    # Optional pre-action focus: keyboard events go to the COMPOSITOR-focused window, which a
+    # background / static-monitor app doesn't have — so `screen_type`/`screen_key` silently land
+    # in the wrong window. Pass focus={app|title|id} (or focus="slack") on any action to raise +
+    # keyboard-focus the target first. Opt-in; never steals focus unless asked.
+    if args.get("focus") is not None:
+        try:
+            _do_focus(args["focus"])
+        except Exception:
+            pass
+    # Populate focused-app context (read-only; degrades silently when awareness is down).
+    if "_focused_app" not in args:
+        try:
+            fw = awareness.focused_window()
+            if fw:
+                args = {**args, "_focused_app": fw.get("app") or fw.get("wm_class")}
+        except Exception:
+            pass
+    reason = reliability.needs_ack(name, args, args.get("_ocr_near_target"))
+    if reason and args.get("ack") != reason:
+        res = {"content": [_txt(f"BLOCKED: this action needs confirmation ({reason}). "
+                                f"Re-issue with ack='{reason}' to proceed.")],
+               "isError": True, "ack_reason": reason}
+        try:
+            reliability.log_action({"tool": name, "args": _redact_args(name, args),
+                                    "warn": f"blocked:{reason}",
+                                    "ms": int((time.time() - t0) * 1000)})
+        except Exception:
+            pass
+        return res
+    # Opt-in pre/post frame capture for the audit log — gives forensic hashes +
+    # changed_bbox per action. Default OFF: two extra grab() calls per action add
+    # ~100-500ms of portal latency, which the lightweight wiring path doesn't pay.
+    audit_frames = os.environ.get("MCP_SCREEN_AUDIT_FRAMES") == "1"
+    pre_hash = post_hash = changed = changed_bbox = None
+    pre_frame = pre_node = None
+    if audit_frames:
+        pre_node = _audit_node(args)
+        if pre_node is not None:
+            try:
+                pre_frame = capture.grab(pre_node)[2]
+                pre_hash = reliability.frame_hash(pre_frame)
+            except Exception:
+                pre_frame = pre_hash = None
+    # Anti-stale baseline: hash the watched node BEFORE the action so a follow-up screenshot can
+    # wait for the frame to actually CHANGE (not merely be "stable", which a repeated stale frame
+    # on a static monitor satisfies instantly). Best-effort; never blocks the action.
+    try:
+        bn = _watch_node(args)
+        state.SESSION["last_input_node"] = bn
+        state.SESSION["last_input_hash"] = reliability.frame_hash(capture.grab(bn)[2])
+    except Exception:
+        state.SESSION["last_input_node"] = state.SESSION["last_input_hash"] = None
+    res = _verify(args, fn)
+    if audit_frames and pre_frame is not None:
+        try:
+            after = capture.grab(pre_node)[2]
+            post_hash = reliability.frame_hash(after)
+            bbox = _click_bbox(pre_node, args)
+            if bbox is not None:
+                changed, changed_bbox = reliability.region_diff(pre_frame, after, bbox)
+            else:
+                # Keyboard tool / no coords: whole-frame hash equality is the signal.
+                changed = pre_hash != post_hash
+        except Exception:
+            pass
+    # Audit log: best-effort, never breaks the action path.
+    try:
+        coords = None
+        if {"x", "y"} <= set(args):
+            try:
+                coords = list(inp.resolve_xy(args))
+            except Exception:
+                coords = None
+        reliability.log_action({
+            "tool": name, "args": _redact_args(name, args),
+            "resolved_coords": coords,
+            "pre_hash": pre_hash, "post_hash": post_hash,
+            "changed": changed, "changed_bbox": changed_bbox,
+            "ms": int((time.time() - t0) * 1000),
+            "warn": "error" if (isinstance(res, dict) and res.get("isError")) else None,
+        })
+    except Exception:
+        pass
+    return {"content": _maybe_shot(args, res["content"], t0)}
+
+def _watch_node(args):
+    """Pick the monitor node to watch for change: the region/view center's monitor, else
+    the first. Used by screen_wait + the wait_stable batch action."""
+    geo = capture.ensure_geo()
+    region = args.get("region")
+    if region:
+        cx, cy = region[0] + region[2] / 2.0, region[1] + region[3] / 2.0
+    elif state.SESSION.get("view"):
+        v = state.SESSION["view"]; cx, cy = v["ox"] + v["dw"] / 2.0, v["oy"] + v["dh"] / 2.0
+    else:
+        return geo[0]["node"]
+    for m in geo:
+        if m["x"] <= cx < m["x"] + m["w"] and m["y"] <= cy < m["y"] + m["h"]:
+            return m["node"]
+    return geo[0]["node"]
+
+
+def _settle(node, timeout=5.0, window=2, thresh=0.5):
+    """Block until `node` stops changing (window consecutive sub-thresh diffs) or timeout.
+    Returns (stable, last_diff, ms)."""
+    t0 = time.time()
+    stable, last = reliability.wait_for_stable_frame(
+        lambda n: capture.grab(n), node, timeout=timeout, window=int(window), thresh=float(thresh))
+    return stable, last, int((time.time() - t0) * 1000)
+
+
+def tool_wait(args):
+    """Wait until the watched area stops changing (settles) or `timeout`s elapse, then
+    optionally screenshot. Use this after an action that kicks off an async / htmx update
+    instead of guessing a fixed delay — it returns as soon as the UI is stable."""
+    try:
+        node = _watch_node(args)
+    except Exception:
+        return {"content": [_txt("wait: no session/geo yet — take a screenshot first")], "isError": True}
+    stable, last, ms = _settle(node, timeout=min(MAX_WAIT_MS / 1000.0, float(args.get("timeout", 5.0))),
+                               window=args.get("window", 2), thresh=args.get("thresh", 0.5))
+    msg = f"settled in {ms}ms" if stable else f"still changing after {ms}ms (timeout; last_diff {last:.2f})"
+    return {"content": _maybe_shot(args, [_txt("wait: " + msg)], time.time())}
+
+
+def tool_tour(args):
+    """Visit several UI states in ONE call, returning a labeled thumbnail after each — the
+    fix for the round-trip bottleneck (collapses N navigate->screenshot turns into 1).
+
+    stops=[{label, steps:[{action,...}], region?, monitor?, settle?}]. Each stop runs its
+    steps (same actions as screen_do: click/scroll/key/type/move/wait, element ids ok),
+    settles, then captures a thumbnail (downscaled to shot_max_edge, default 1280). The
+    user-takeover guard applies per step; a takeover stops the whole tour (force to bypass)."""
+    stops = args.get("steps") or args.get("stops") or []
+    default_settle = float(args.get("settle", 400))
+    force = args.get("force")
+    max_edge = int(args.get("shot_max_edge", 1280))
+    capture.ensure_geo()   # self-initialize so the first step's click has geo (no warm-up shot needed)
+    content, errs, t_all = [], [], time.time()
+    for si, stop in enumerate(stops):
+        label = stop.get("label", f"stop{si}")
+        for step in (dict(s) for s in stop.get("steps", [])):
+            action = step.pop("action", None)
+            if action == "wait":
+                time.sleep(min(MAX_WAIT_MS, float(step.get("ms", 300))) / 1000.0); continue
+            if action == "wait_stable":
+                try:
+                    _settle(_watch_node(step), timeout=min(MAX_WAIT_MS / 1000.0, float(step.get("timeout", 5.0))))
+                except Exception:
+                    pass
+                continue
+            fn = _ACTIONS.get(action)
+            if not fn:
+                errs.append(f"{label}: unknown action {action!r}"); continue
+            try:
+                step = _resolve_element(step)
+                inp.guard_user(step.get("force", force))
+                fn(step)
+            except inp.UserControlError as e:
+                content.insert(0, _txt(f"TOUR STOPPED at '{label}': {e}"))
+                return {"content": content, "isError": True}
+            except Exception as e:  # noqa: BLE001 — record + keep touring
+                errs.append(f"{label}: {e}")
+        settle = min(MAX_WAIT_MS, float(stop.get("settle", default_settle))) / 1000.0
+        if settle > 0:
+            time.sleep(settle)
+        region, monitor = stop.get("region"), stop.get("monitor")
+        if region is None and monitor is None and state.SESSION.get("view"):
+            v = state.SESSION["view"]; region = [v["ox"], v["oy"], v["dw"], v["dh"]]
+        t0 = time.time()
+        img, ox, oy = capture.capture_desktop(region, monitor)
+        try:
+            capture.cursor_pos(); img = capture.draw_cursor(img, ox, oy)
+        except Exception:
+            pass
+        content += capture.encode_store(img, ox, oy, label, t0, max_edge=max_edge)
+        if REC.active():
+            REC.log_frame(img, f"tour:{label}", state.SESSION.get("view"))
+    head = (f"TOUR ({len(stops)} stops, {int((time.time() - t_all) * 1000)}ms total): "
+            + " -> ".join(s.get("label", f"stop{i}") for i, s in enumerate(stops)))
+    if errs:
+        head += "  | errors: " + "; ".join(errs)
+    content.insert(0, _txt(head))
+    return {"content": content}
+
+def tool_do(args):
+    """Batched ordered actions: steps=[{action, ...args}]. One optional final screenshot."""
+    steps = args.get("steps", [])
+    stop_on_error = args.get("stop_on_error", True)
+    force = args.get("force")
+    out = []
+    for i, step in enumerate(dict(s) for s in steps):
+        action = step.pop("action", None)
+        fn = _ACTIONS.get(action)
+        if action == "wait":
+            time.sleep(min(MAX_WAIT_MS, float(step.get("ms", 300))) / 1000.0); out.append(f"[{i}] wait"); continue
+        if action == "wait_stable":
+            try:
+                _stable, _d, _ms = _settle(_watch_node(step), timeout=min(MAX_WAIT_MS / 1000.0, float(step.get("timeout", 5.0))))
+                out.append(f"[{i}] wait_stable ({'settled' if _stable else 'timeout'} {_ms}ms)")
+            except Exception as _e:
+                out.append(f"[{i}] wait_stable skipped ({_e})")
+            continue
+        if not fn:
+            out.append(f"[{i}] ERROR unknown action {action!r}")
+            if stop_on_error:
+                return {"content": [_txt("\n".join(out))], "isError": True}
+            continue
+        try:
+            step = _resolve_element(step)
+            inp.guard_user(step.get("force", force))   # stop the batch if the user took the mouse
+            if step.get("focus") is not None:          # per-step pre-focus (batch bypasses _action)
+                try:
+                    _do_focus(step["focus"])
+                except Exception:
+                    pass
+            step.pop("shot", None)
+            r = _verify(step, fn)
+            out.append(f"[{i}] {r['content'][0]['text']}")
+        except inp.UserControlError as e:
+            out.append(f"[{i}] STOPPED: {e}")
+            return {"content": [_txt("\n".join(out))], "isError": True}
+        except Exception as ex:
+            out.append(f"[{i}] ERROR {ex}")
+            if stop_on_error:
+                return {"content": [_txt("\n".join(out))], "isError": True}
+    content = [_txt("\n".join(out))]
+    return {"content": _maybe_shot(args, content, time.time())}
+
+_REGION = {"type": "array", "items": {"type": "number"}, "description": "[x,y,w,h] desktop px to crop/zoom"}
+_SHOT = {"type": "boolean", "description": "return a screenshot after the action"}
+_SPACE = {"type": "string", "description": "'view' (default): coords are pixels in the last screenshot; 'desktop': raw px; 'norm': 0-1000"}
+_VERIFY = {"type": "boolean", "description": "after the action, warn if the screen didn't change (catches misclicks)"}
+_ELEM = {"type": "number", "description": "click the element id from the last screen_screenshot(annotate=true) — server resolves exact coords (no guessing)"}
+_FORCE = {"type": "boolean", "description": "bypass the user-takeover guard; also use to take control back after a STOPPED result (the user moved the mouse)"}
+_VIEWID = {"type": "number", "description": "bind these view-space coords to the screenshot they were read from (the view#N in that shot's text). If a later screenshot has since rebound the transform, the action is rejected instead of landing on the wrong spot. Strongly recommended whenever you take more than one screenshot before clicking."}
+_FOCUS = {"type": "string", "description": "raise + keyboard-focus this app/window BEFORE the action (e.g. 'slack', 'firefox') so injected keys/clicks land in it, not whatever's focused. Keyboard events go to the focused window — a background or static-monitor app won't get them otherwise. Uses the window-info extension if loaded, else the GNOME overview."}
+_POS = {"x": {"type": "number"}, "y": {"type": "number"}, "element": _ELEM, "space": _SPACE, "view_id": _VIEWID, "focus": _FOCUS, "shot": _SHOT, "verify": _VERIFY, "force": _FORCE, "region": _REGION, "monitor": {"type": "number"}, "settle": {"type": "number"}}
+
+TOOLS = [
+    {"name": "screen_screenshot", "description": "Capture the desktop, lossless, auto-sized to the model's native resolution. No args = full multi-monitor overview to LOCATE targets (never assume which monitor). region=[x,y,w,h] or monitor=<i> zooms in crisp. annotate=true overlays numbered Set-of-Marks on detected UI elements + lists their click coords. use_cache=true (with annotate) reuses the world-model's learned elements for a known screen, skipping OCR. Responses carry a SENSE line (what changed: new elements, modal opened, no-op) so you adapt automatically.",
+     "inputSchema": {"type": "object", "properties": {"region": _REGION, "monitor": {"type": "number"}, "annotate": {"type": "boolean"}, "use_cache": {"type": "boolean", "description": "with annotate: reuse learned elements for a known screen (skips OCR)"}, "regeo": {"type": "boolean"}, "fresh": {"type": "boolean", "description": "force a CURRENT frame on a static monitor (default true; defeats stale keepalive-resent captures). Set false (or settle=0) for the instantaneous cached frame."}}}},
+    {"name": "screen_list_monitors", "description": "List monitors (origin, size, scale), desktop bounds, and open windows.",
+     "inputSchema": {"type": "object", "properties": {"regeo": {"type": "boolean"}}}},
+    {"name": "screen_move_mouse", "description": "Move mouse to x,y (view-space default). Or dx,dy for a relative nudge.",
+     "inputSchema": {"type": "object", "properties": {**_POS, "dx": {"type": "number"}, "dy": {"type": "number"}}}},
+    {"name": "screen_click", "description": "Click at x,y (view-space default; server maps to the real screen). Omit x,y to click in place. button: left|right|middle, double:bool.",
+     "inputSchema": {"type": "object", "properties": {**_POS, "button": {"type": "string"}, "double": {"type": "boolean"}}}},
+    {"name": "screen_scroll", "description": "Scroll the wheel. direction up|down|left|right, amount notches. Optional x,y to position first.",
+     "inputSchema": {"type": "object", "properties": {**_POS, "direction": {"type": "string"}, "amount": {"type": "number"}}}},
+    {"name": "screen_drag", "description": "Press-drag from (x1,y1) to (x2,y2) (view-space). button: left|middle|right.",
+     "inputSchema": {"type": "object", "properties": {"x1": {"type": "number"}, "y1": {"type": "number"}, "x2": {"type": "number"}, "y2": {"type": "number"}, "space": _SPACE, "view_id": _VIEWID, "button": {"type": "string"}, "shot": _SHOT, "force": _FORCE, "region": _REGION, "settle": {"type": "number"}}, "required": ["x1", "y1", "x2", "y2"]}},
+    {"name": "screen_key", "description": "Press a key/combo: 'Ctrl+L', 'Enter', 'Alt+Tab', 'F5'. Keys go to the FOCUSED window — pass focus='appname' to focus the target first (a background/static-monitor app won't receive keys otherwise).",
+     "inputSchema": {"type": "object", "properties": {"keys": {"type": "string"}, "focus": _FOCUS, "shot": _SHOT, "verify": _VERIFY, "force": _FORCE, "region": _REGION, "settle": {"type": "number"}}, "required": ["keys"]}},
+    {"name": "screen_type", "description": "Type text (Unicode ok); enter:true presses Enter after. Text goes to the FOCUSED window — pass focus='appname' (or call screen_focus first) so it lands in the right app, not whatever currently has focus.",
+     "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}, "enter": {"type": "boolean"}, "focus": _FOCUS, "shot": _SHOT, "verify": _VERIFY, "force": _FORCE, "region": _REGION, "settle": {"type": "number"}}, "required": ["text"]}},
+    {"name": "screen_focus", "description": "Raise + give KEYBOARD FOCUS to a window so injected keys/clicks land in it — keyboard events go to the focused window, which a background or static-monitor app does NOT have (the #1 reason 'I typed but nothing happened'). Match by app ('slack', 'firefox'), title substring, or an explicit window id from screen_list_monitors. Uses the window-info extension's ActivateWindow when loaded; otherwise falls back to the GNOME overview (types the name). Call this before screen_type/screen_key on an app you haven't clicked into.",
+     "inputSchema": {"type": "object", "properties": {"app": {"type": "string"}, "title": {"type": "string"}, "id": {"type": ["string", "number"]}}}},
+    {"name": "screen_do", "description": "Run an ordered batch of actions in one call to cut round-trips: steps=[{action:'move|click|scroll|drag|key|type|wait|wait_stable', ...that action's args}]. 'wait' sleeps fixed ms; 'wait_stable' blocks until the screen settles (for htmx/async). One optional final screenshot (shot=true, region=[x,y,w,h] to frame it). Stops mid-batch if you take the mouse (force=true to override).",
+     "inputSchema": {"type": "object", "properties": {"steps": {"type": "array", "items": {"type": "object"}}, "stop_on_error": {"type": "boolean"}, "shot": _SHOT, "force": _FORCE, "region": _REGION, "monitor": {"type": "number"}, "settle": {"type": "number"}}, "required": ["steps"]}},
+    {"name": "screen_read_page", "description": "Read a whole scrollable view in ONE call: auto-scrolls down until content stops moving, annotating each screen and accumulating every interactable it finds. Returns the full inventory + a final screenshot — instead of you doing N rounds of scroll+screenshot. region defaults to the last view; max_pages caps it; force bypasses the takeover guard. Leaves the current screen clickable by [id].",
+     "inputSchema": {"type": "object", "properties": {"region": _REGION, "max_pages": {"type": "number"}, "amount": {"type": "number"}, "settle_ms": {"type": "number"}, "force": _FORCE}}},
+    {"name": "screen_tour", "description": "Visit several UI states in ONE call and get a labeled thumbnail of each — collapses N navigate->screenshot round-trips into 1 (the fast way to survey/navigate). steps=[{label, steps:[{action:'click|scroll|key|type|move|wait', ...}], region?, settle?}]. Steps take the same args as screen_do (element ids ok). shot_max_edge (default 1280) sizes the thumbnails; settle is the per-stop ms before capture. force bypasses the user-takeover guard.",
+     "inputSchema": {"type": "object", "properties": {"steps": {"type": "array", "items": {"type": "object"}, "description": "ordered stops: [{label, steps:[actions], region?, settle?}]"}, "settle": {"type": "number"}, "shot_max_edge": {"type": "number"}, "force": _FORCE}, "required": ["steps"]}},
+    {"name": "screen_wait", "description": "Wait until the screen stops changing (settles) or timeout, then optionally screenshot. Use after an action that triggers an async/htmx update — returns as soon as the UI is stable instead of you guessing a fixed delay. Also usable as a 'wait_stable' step inside screen_do/screen_tour. Args: timeout (s, default 5), region/monitor (area to watch), shot.",
+     "inputSchema": {"type": "object", "properties": {"timeout": {"type": "number"}, "thresh": {"type": "number"}, "window": {"type": "number"}, "region": _REGION, "monitor": {"type": "number"}, "shot": _SHOT}}},
+    {"name": "screen_session", "description": "Session recording/replay: op=start|stop|list|status|replay-path. Records every action + screenshot to a replayable trajectory.",
+     "inputSchema": {"type": "object", "properties": {"op": {"type": "string"}, "id": {"type": "string"}}}},
+    {"name": "screen_reload", "description": "Hot-reload this server's own code in place (re-exec, preserving the connection) so edits take effect WITHOUT a /mcp reconnect.",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "screen_diag", "description": "Health dump: session/geo, live cursor position + user-takeover guard state, grounding backends (OCR/OmniParser) and whether they're warmed. Check this first when capture, clicks, or the cursor guard misbehave.",
+     "inputSchema": {"type": "object", "properties": {}}},
+]
+HANDLERS = {
+    "screen_screenshot": tool_screenshot, "screen_list_monitors": tool_list_monitors,
+    "screen_move_mouse": lambda a: _action("screen_move_mouse", inp.move, a),
+    "screen_click":      lambda a: _action("screen_click",      inp.click, a),
+    "screen_scroll":     lambda a: _action("screen_scroll",     inp.scroll, a),
+    "screen_drag":       lambda a: _action("screen_drag",       inp.drag, a),
+    "screen_key":        lambda a: _action("screen_key",        inp.key, a),
+    "screen_type":       lambda a: _action("screen_type",       inp.type_text, a),
+    "screen_focus": tool_focus,
+    "screen_do": tool_do, "screen_tour": tool_tour, "screen_read_page": autoloop.scroll_to_reveal,
+    "screen_wait": tool_wait, "screen_session": recorder.tool_session, "screen_diag": tool_diag,
+}
+
+INSTRUCTIONS = ("Drive this machine's desktop. Loop: (1) screen_screenshot() overview to locate the target "
+                "(never assume which monitor; the text reports the focused window). (2) screen_screenshot(region=[x,y,w,h]) "
+                "or annotate=true to zoom/ground for crisp reading + accurate clicks. (3) Click/type with space='view' (default) "
+                "using coords as seen in the latest screenshot; add verify=true to catch misclicks, shot=true to see the result, "
+                "or screen_do=[...] to batch. screen_session starts a replayable recording.\n"
+                "FRESH FRAMES: a screenshot taken right after an action auto-settles the UI first (waits for "
+                "repainting to stop) so you always see the post-action state, never a stale/mid-transition frame — "
+                "no need to add your own wait. Pass settle=0 to skip it. A small region screenshot is the fastest, "
+                "crispest read; full-desktop is for locating only.\n"
+                "MONITOR FRAMES: GNOME streams a monitor only on damage, so a monitor that is ON but STATIC "
+                "(idle, no cursor) yields no frame until something changes — mcp-screen auto-nudges the pointer "
+                "to prime it (opt out: MCP_SCREEN_NO_NUDGE=1). A genuinely DPMS/power-saved monitor emits no "
+                "frames at all (expected, not a fault) and you cannot wake it yourself. If a screenshot reports a "
+                "monitor ASLEEP, ask the user to wake it (move the mouse onto it / press a key) and foreground the "
+                "target app, then retry; an ON-but-static note clears once the monitor next changes. Other "
+                "monitors stay capturable.\n"
+                "SELF-LEARNING (read these — they let you adapt without extra calls): responses carry a `SENSE` line "
+                "stating what changed — new elements that appeared, a modal that opened (deal with it first), or "
+                "'nothing changed' meaning your last action was a no-op/misclick (retry/re-ground). The server learns each "
+                "screen it annotates: pass use_cache=true to screen_screenshot(annotate=true) to reuse learned elements on a "
+                "known screen and skip OCR. To read a long/scrollable view, call screen_read_page ONCE instead of looping "
+                "scroll+screenshot. To survey several screens at once, use screen_tour. screen_diag shows what's been learned.")
+
+def reply(mid, result=None, error=None):
+    m = {"jsonrpc": "2.0", "id": mid}
+    if error: m["error"] = error
+    else: m["result"] = result
+    sys.stdout.write(json.dumps(m) + "\n"); sys.stdout.flush()
+
+def main():
+    import threading, atexit, signal
+    threading.Thread(target=grounding.warmup, daemon=True).start()  # kill the cold-start model load
+    # Persistent PipeWire pipelines must be released on EVERY exit path or they linger
+    # (native GStreamer threads keep pulling screencast buffers + drive the compositor).
+    atexit.register(capture.shutdown)
+    atexit.register(inp.ui.shutdown)
+    def _bye(*_a):
+        try:
+            capture.shutdown()
+        finally:
+            os._exit(0)
+    for _sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        try:
+            signal.signal(_sig, _bye)
+        except Exception:
+            pass
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except Exception:
+                continue
+            mid = msg.get("id"); method = msg.get("method")
+            if method == "initialize":
+                reply(mid, {"protocolVersion": "2024-11-05",
+                            "capabilities": {"tools": {"listChanged": True}},
+                            "serverInfo": {"name": "mcp-screen", "version": __version__},
+                            "instructions": INSTRUCTIONS})
+            elif method == "notifications/initialized":
+                pass
+            elif method == "tools/list":
+                reply(mid, {"tools": TOOLS})
+            elif method == "tools/call":
+                name = msg["params"]["name"]; args = msg["params"].get("arguments", {}) or {}
+                if name == "screen_reload":
+                    reply(mid, {"content": [_txt("mcp-screen hot-reloaded in place (execv); tool list refreshed")]})
+                    try:
+                        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}) + "\n")
+                        sys.stdout.flush()
+                        capture.shutdown()
+                        inp.ui.shutdown()   # release uinput devices so reload doesn't leak them
+                    except Exception:
+                        pass
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+                t0 = time.time()
+                try:
+                    res = HANDLERS[name](args)
+                    reply(mid, res)
+                    if REC.active():
+                        try:
+                            resolved = list(inp.resolve_xy(args)) if {"x", "y"} <= set(args) else None
+                        except Exception:
+                            resolved = None
+                        REC.log_action(name, args, (res.get("content") or [{}])[0].get("text", ""),
+                                       not res.get("isError"), int((time.time() - t0) * 1000),
+                                       resolved=resolved, view=state.SESSION.get("view"))
+                except Exception as e:
+                    import traceback
+                    tb = traceback.format_exc()
+                    state.log(tb)
+                    try:
+                        open("/tmp/screen_err.txt", "w").write(tb)
+                    except Exception:
+                        pass
+                    if REC.active():
+                        REC.log_action(name, args, f"ERROR: {e}", False, int((time.time() - t0) * 1000))
+                    reply(mid, {"content": [_txt(f"ERROR: {e}")], "isError": True})
+            elif mid is not None:
+                reply(mid, {}, error={"code": -32601, "message": f"unknown method {method}"})
+    finally:
+        capture.shutdown()
+        os._exit(0)
+
+if __name__ == "__main__":
+    main()

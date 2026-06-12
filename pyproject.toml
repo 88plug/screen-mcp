@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Run from repo root: `pytest`. tests/ imports project modules at the top level
+# (sense, grounding, input, recorder), so the project root must be on PYTHONPATH.
+pythonpath = ["."]
+testpaths = ["tests"]

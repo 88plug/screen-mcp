@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Runtime artefacts written outside the repo but listed here for awareness:
+#   ~/.local/share/mcp-screen/world/map.db      world-model SQLite cache
+#   ~/.local/share/mcp-screen/sessions/*/       recorder trajectories + frames
+#   ~/.local/state/mcp-screen/actions.jsonl     reliability audit log
+#   ~/.config/mcp-screen/token                  portal restore token
+#   /tmp/screen_err.txt                         last unhandled tool traceback
