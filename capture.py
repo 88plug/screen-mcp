@@ -36,7 +36,13 @@ import state
 
 LANCZOS = Image.Resampling.LANCZOS
 
-Gst.init(None)
+# Gst.init: older PyGObject accepts None; GStreamer/gobject-introspection >= 1.28
+# rejects it ("Argument 1 does not allow None as a value") and requires a list.
+# Try both so the server starts on every binding version.
+try:
+    Gst.init(None)
+except TypeError:
+    Gst.init([])
 
 # node_id -> {"pipe": Gst.Pipeline, "sink": appsink}. Guarded by _LOCK.
 _PIPES = {}
