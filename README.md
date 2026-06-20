@@ -2,6 +2,8 @@
 
 # screen-mcp
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/88plug/screen-mcp)
+
 Give a model eyes and hands on a Linux Wayland desktop: screenshot, click, type, scroll, drag, and read any visible app.
 
 [![plugin-validate](https://github.com/88plug/screen-mcp/actions/workflows/plugin-validate.yml/badge.svg)](https://github.com/88plug/screen-mcp/actions/workflows/plugin-validate.yml)
