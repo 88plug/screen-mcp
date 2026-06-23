@@ -1,14 +1,10 @@
-<div align="center">
-
 # screen-mcp
 
 Give a model eyes and hands on a Linux Wayland desktop: screenshot, click, type, scroll, drag, and read any visible app.
 
 [![plugin-validate](https://github.com/88plug/screen-mcp/actions/workflows/plugin-validate.yml/badge.svg)](https://github.com/88plug/screen-mcp/actions/workflows/plugin-validate.yml)
-[![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue?style=flat)](LICENSE.md)
+[![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue?style=flat)](https://github.com/88plug/screen-mcp/blob/main/LICENSE.md)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2?style=flat)](https://github.com/88plug/claude-code-plugins)
-
-</div>
 
 screen-mcp is an MCP server for Claude Code that lets a model see and operate
 your GNOME/Wayland desktop. It captures any monitor through PipeWire, drives the
@@ -45,9 +41,9 @@ You should get back a labeled capture plus the focused-window name within a few
 seconds. The portal returns a restore token cached at `~/.config/mcp-screen` so
 later runs are silent.
 
-> [!IMPORTANT]
-> screen-mcp runs on Linux + Wayland + GNOME only, and grounding is CPU-only by
-> design. See [Requirements](#requirements) before installing.
+!!! important
+    screen-mcp runs on Linux + Wayland + GNOME only, and grounding is CPU-only by
+    design. See [Requirements](#requirements) before installing.
 
 ## What it does
 
@@ -99,8 +95,8 @@ on no-change misclicks, `force: true` to bypass the user-takeover guard, and
 
 ## Requirements
 
-> [!IMPORTANT]
-> screen-mcp targets a specific stack. It will not run elsewhere.
+!!! important
+    screen-mcp targets a specific stack. It will not run elsewhere.
 
 - Linux + Wayland + GNOME. The awareness layer uses a bundled GNOME Shell
   extension; AT-SPI is the fallback for GTK apps.
@@ -117,7 +113,7 @@ Grounding is CPU-only by design: the server hard-disables the GPU
 <summary>System packages</summary>
 
 Install the system deps before the Python deps. See
-[requirements.txt](requirements.txt) for the full `pacman` / `apt` one-liners.
+[requirements.txt](https://github.com/88plug/screen-mcp/blob/main/requirements.txt) for the full `pacman` / `apt` one-liners.
 
 ```bash
 # Arch / Manjaro
@@ -223,10 +219,10 @@ debugging crashes.
 ## Contributing
 
 Issues and pull requests are welcome. Please run `pytest -q` before opening a PR.
-See [CLAUDE.md](CLAUDE.md) for architecture notes and the hard-won ops details
+See [CLAUDE.md](https://github.com/88plug/screen-mcp/blob/main/CLAUDE.md) for architecture notes and the hard-won ops details
 behind the capture and input layers.
 
 ## License
 
-[FSL-1.1-ALv2](LICENSE.md) © 2026 [88plug](https://github.com/88plug). The
+[FSL-1.1-ALv2](https://github.com/88plug/screen-mcp/blob/main/LICENSE.md) © 2026 [88plug](https://github.com/88plug). The
 Functional Source License converts to Apache 2.0 two years after each release.
