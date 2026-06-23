@@ -762,7 +762,7 @@ def main():
                 continue
             mid = msg.get("id"); method = msg.get("method")
             if method == "initialize":
-                reply(mid, {"protocolVersion": "2024-11-05",
+                reply(mid, {"protocolVersion": "2025-11-25",
                             "capabilities": {"tools": {"listChanged": True}},
                             "serverInfo": {"name": "mcp-screen", "version": __version__},
                             "instructions": INSTRUCTIONS})
