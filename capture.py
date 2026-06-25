@@ -390,12 +390,21 @@ def _nudge_prime(node_id, lpx, lpy, lw, lh, sx, sy):
             gx, gy = int(prior[0]), int(prior[1])
         else:
             gx, gy = int(x0 + mw / 2), int(y0 + mh / 2)
-        inp._goto(gx, gy)
-        if GLib is not None:
-            GLib.usleep(20000)
         wx = gx + 3 if gx + 3 < x0 + mw else gx - 3   # tiny wiggle: ensure a fresh damage region
         wy = gy + 3 if gy + 3 < y0 + mh else gy - 3
-        inp._goto(wx, wy)
+        # uinput abs-move is reliable for static monitors (kernel-level, bypasses portal coalescing).
+        # Portal _goto is the fallback (unreliable on idle screens but requires no evdev dep).
+        if inp._use_uinput():
+            import uinput_backend as _ui
+            _ui.move(gx, gy)
+            if GLib is not None:
+                GLib.usleep(20000)
+            _ui.move(wx, wy)
+        else:
+            inp._goto(gx, gy)
+            if GLib is not None:
+                GLib.usleep(20000)
+            inp._goto(wx, wy)
         sink = _get_sink(node_id)
         sample = None
         for _ in range(3):          # up to ~3s for the damaged frame to arrive
@@ -408,7 +417,11 @@ def _nudge_prime(node_id, lpx, lpy, lw, lh, sx, sy):
     finally:
         try:                        # restore the pointer wherever the user/we last had it
             if prior is not None:
-                inp._goto(int(prior[0]), int(prior[1]))
+                if inp._use_uinput():
+                    import uinput_backend as _ui
+                    _ui.move(int(prior[0]), int(prior[1]))
+                else:
+                    inp._goto(int(prior[0]), int(prior[1]))
         except Exception:
             pass
 

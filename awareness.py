@@ -183,35 +183,41 @@ def monitor_power():
         return []
 
 
-def atspi_titles():
-    """FALLBACK: window titles via AT-SPI (native GTK apps only). [] on any failure."""
-    titles = []
-    try:
-        gi.require_version("Atspi", "2.0")
-        from gi.repository import Atspi
-
-        for i in range(Atspi.get_desktop_count()):
-            desktop = Atspi.get_desktop(i)
-            for j in range(desktop.get_child_count()):
+_ATSPI_SCRIPT = """
+import json, gi
+gi.require_version("Atspi", "2.0")
+from gi.repository import Atspi
+titles = []
+for i in range(Atspi.get_desktop_count()):
+    desktop = Atspi.get_desktop(i)
+    for j in range(desktop.get_child_count()):
+        try:
+            app = desktop.get_child_at_index(j)
+            if app is None: continue
+            for k in range(app.get_child_count()):
                 try:
-                    app = desktop.get_child_at_index(j)
-                    if app is None:
-                        continue
-                    for k in range(app.get_child_count()):
-                        try:
-                            frame = app.get_child_at_index(k)
-                            if frame is None:
-                                continue
-                            name = frame.get_name()
-                            if name:
-                                titles.append(name)
-                        except Exception:
-                            continue
-                except Exception:
-                    continue
+                    frame = app.get_child_at_index(k)
+                    if frame and frame.get_name(): titles.append(frame.get_name())
+                except: pass
+        except: pass
+print(json.dumps(titles))
+"""
+
+
+def atspi_titles():
+    """FALLBACK: window titles via AT-SPI. Isolated in a subprocess so AT-SPI's
+    g_error() abort (when the bus is absent) cannot kill the server process."""
+    import subprocess, sys, json
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", _ATSPI_SCRIPT],
+            capture_output=True, text=True, timeout=4.0,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            return json.loads(r.stdout.strip())
     except Exception:
-        return []
-    return titles
+        pass
+    return []
 
 
 def summary():
