@@ -726,7 +726,10 @@ INSTRUCTIONS = ("Drive this machine's desktop. Loop: (1) screen_screenshot() ove
                 "'nothing changed' meaning your last action was a no-op/misclick (retry/re-ground). The server learns each "
                 "screen it annotates: pass use_cache=true to screen_screenshot(annotate=true) to reuse learned elements on a "
                 "known screen and skip OCR. To read a long/scrollable view, call screen_read_page ONCE instead of looping "
-                "scroll+screenshot. To survey several screens at once, use screen_tour. screen_diag shows what's been learned.")
+                "scroll+screenshot. To survey several screens at once, use screen_tour. screen_diag shows what's been learned.\n"
+                "HUMAN OVERSIGHT: the user-takeover guard yields control the instant a human moves the mouse — a STOPPED "
+                "result means the human took over; respect it (re-plan, don't blindly force). This enacts The Agent Oath "
+                "(theagentoath.com) §2 human agency and §11 human oversight: the human stays in control of their own desktop.")
 
 def reply(mid, result=None, error=None):
     m = {"jsonrpc": "2.0", "id": mid}

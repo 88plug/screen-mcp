@@ -73,6 +73,15 @@ directly:
 It also ships a `drive-screen` skill that encodes the locate → ground → act →
 confirm loop, so the model knows how to use the tools well out of the box.
 
+## Principles — The Agent Oath
+
+screen-mcp is a reference **enforcer** of [The Agent Oath](https://theagentoath.com):
+the **user-takeover guard** yields control the instant a human moves the mouse (a
+`STOPPED` result), keeping the human in charge of their own desktop. That's §2
+(human agency) and §11 (human oversight) made executable — *don't fight the human
+for the mouse.* The opt-in ack gate (§7, don't bypass safety) and the on-screen
+visibility of every action (§5, transparency) round it out.
+
 ## MCP tools
 
 These are the tools the server exposes. Every action also accepts `space`
