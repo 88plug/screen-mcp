@@ -220,6 +220,24 @@ def atspi_titles():
     return []
 
 
+_EXT_UUID = "window-info@local"
+
+
+def _ext_install_state():
+    """Distinguish installed-but-not-loaded (needs relogin) from not-installed (run install.sh),
+    so the fallback message tells the user the RIGHT next step instead of always saying 'install'."""
+    import os
+
+    dest = os.path.expanduser(
+        f"~/.local/share/gnome-shell/extensions/{_EXT_UUID}"
+    )
+    if os.path.isfile(os.path.join(dest, "extension.js")):
+        # Installed; the D-Bus service was absent (we're in the fallback), so the running Shell
+        # hasn't loaded it yet — Wayland only loads new extensions at Shell startup.
+        return "installed; log out/in (Wayland) to activate window-info"
+    return "not installed; run gnome-shell-extension/window-info@local/install.sh"
+
+
 def summary():
     """Short text line for screenshot metadata. Never raises."""
     try:
@@ -229,13 +247,14 @@ def summary():
             title = fw.get("title") or ""
             return f"focused: {app} — {title}".rstrip(" —")
 
+        hint = _ext_install_state()
         titles = atspi_titles()
         if titles:
-            return f"awareness: extension not loaded; AT-SPI sees {len(titles)} window(s)"
+            return f"awareness: window-info not loaded ({hint}); AT-SPI sees {len(titles)} window(s)"
 
-        return "awareness: unavailable (install window-info extension)"
+        return f"awareness: unavailable — {hint}"
     except Exception:
-        return "awareness: unavailable (install window-info extension)"
+        return "awareness: unavailable (window-info extension not loaded)"
 
 
 if __name__ == "__main__":
