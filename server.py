@@ -9,6 +9,7 @@ Thin MCP stdio loop wiring the modules:
   awareness  focused-window / window-list (GNOME Shell ext + AT-SPI fallback)
   reliability stable-frame / verify / action log
   recorder   session record + replay
+  prereqs    prerequisite / capability matrix (screen_diag)
 
 Coordinate model: every screenshot downscales to the model's native image size and
 the server stores the view->desktop transform; click/type use space='view' (default)
@@ -263,9 +264,12 @@ def tool_screenshot(args):
 
 def tool_diag(args):
     """Live health dump: session/geo, the cursor probe cache + guard state, grounding
-    backends. Permanent ops tool — first thing to check when capture/clicks/cursor act up."""
+    backends, and prereqs matrix. Permanent ops tool — first thing to check when
+    capture/clicks/cursor act up."""
+    import prereqs
     d = {
         "version": __version__,
+        "prereqs": prereqs.check_all(),
         "session": {"started": bool(state.SESSION.get("handle")),
                     "streams": len(state.SESSION.get("streams") or []),
                     "geo": state.SESSION.get("geo"),
@@ -689,7 +693,7 @@ TOOLS = [
      "inputSchema": {"type": "object", "properties": {"op": {"type": "string"}, "id": {"type": "string"}}}},
     {"name": "screen_reload", "title": "Reload Server", "annotations": {"readOnlyHint": False, "destructiveHint": True}, "description": "Hot-reload this server's own code in place (re-exec, preserving the connection) so edits take effect WITHOUT a /mcp reconnect.",
      "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "screen_diag", "title": "Diagnostics", "annotations": {"readOnlyHint": True, "destructiveHint": False}, "description": "Health dump: session/geo, live cursor position + user-takeover guard state, grounding backends (OCR/OmniParser) and whether they're warmed. Check this first when capture, clicks, or the cursor guard misbehave.",
+    {"name": "screen_diag", "title": "Diagnostics", "annotations": {"readOnlyHint": True, "destructiveHint": False}, "description": "Health dump: prereqs matrix (portal, window-info, uinput, gstreamer, …) with next_step hints, plus session/geo, cursor/guard state, grounding backends. Check this first when capture, clicks, or the cursor guard misbehave.",
      "inputSchema": {"type": "object", "properties": {}}},
 ]
 HANDLERS = {

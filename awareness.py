@@ -223,19 +223,25 @@ def atspi_titles():
 _EXT_UUID = "window-info@local"
 
 
-def _ext_install_state():
-    """Distinguish installed-but-not-loaded (needs relogin) from not-installed (run install.sh),
-    so the fallback message tells the user the RIGHT next step instead of always saying 'install'."""
+def extension_state():
+    """Installed vs D-Bus-loaded state for window-info@local. Never raises."""
     import os
 
-    dest = os.path.expanduser(
-        f"~/.local/share/gnome-shell/extensions/{_EXT_UUID}"
-    )
-    if os.path.isfile(os.path.join(dest, "extension.js")):
-        # Installed; the D-Bus service was absent (we're in the fallback), so the running Shell
-        # hasn't loaded it yet — Wayland only loads new extensions at Shell startup.
-        return "installed; log out/in (Wayland) to activate window-info"
-    return "not installed; run gnome-shell-extension/window-info@local/install.sh"
+    dest = os.path.expanduser(f"~/.local/share/gnome-shell/extensions/{_EXT_UUID}")
+    installed = os.path.isfile(os.path.join(dest, "extension.js"))
+    loaded = _call("GetMonitors") is not None
+    if loaded:
+        hint = None
+    elif installed:
+        hint = "installed; log out/in (Wayland) to activate window-info"
+    else:
+        hint = "not installed; run gnome-shell-extension/window-info@local/install.sh"
+    return {"installed": installed, "loaded": loaded, "hint": hint}
+
+
+def _ext_install_state():
+    """Human hint for summary() when the extension is not loaded."""
+    return extension_state()["hint"]
 
 
 def summary():
