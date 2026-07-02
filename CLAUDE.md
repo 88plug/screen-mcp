@@ -2,7 +2,8 @@
 
 An MCP server that drives this machine's Wayland desktop (screenshot, click, type, scroll,
 drag, multi-screen tour) over the xdg-desktop-portal RemoteDesktop + ScreenCast APIs. Pure
-Python, CPU-only, no GPU. Current version: **1.3.2**.
+Python, CPU-only, no GPU. Distribution version is rolling calver (`YEAR.MONTH.<commit-count>`,
+same formula as the 88plug hub) from `version.py` → `server.__version__`.
 
 ## How to run / test
 
@@ -167,7 +168,8 @@ Module map:
 - **Fail-open philosophy:** capture/cursor/guard failures return None/skip rather than raise,
   so a degraded subsystem never breaks the desktop tools. Keep new code in this style, but
   prefer signaling an error over returning plausible-but-wrong results.
-- **Version is single-sourced** from `server.__version__`; both `serverInfo` and `screen_diag`
+- **Version is single-sourced** from `version.distribution_version()` → `server.__version__`
+  (rolling calver; install-dir basename or `git rev-list --count`); both `serverInfo` and `screen_diag`
   reference it. Bump in one place.
 
 ## Conventions

@@ -53,10 +53,9 @@ OPS NOTES (hard-won; read before changing capture/input/cursor code):
 import sys, os, json, time
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # hard no-GPU: grounding is CPU-only
 import state, capture, input as inp, grounding, awareness, reliability, recorder, sense, worldmodel, autoloop
+from version import __version__
 
 REC = recorder.REC
-
-__version__ = "1.3.2"
 MAX_WAIT_MS = int(os.environ.get("MCP_SCREEN_MAX_WAIT_MS", "30000"))
 
 def _txt(s):
