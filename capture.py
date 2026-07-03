@@ -51,6 +51,10 @@ except TypeError:
 # node_id -> {"pipe": Gst.Pipeline, "sink": appsink}. Guarded by _LOCK.
 _PIPES = {}
 _LOCK = threading.Lock()
+# node_id -> human-readable reason for the last _nudge_prime outcome. Debug-only surfacing
+# (asleep_hint()/diag() read this) so a no-frame monitor's actual cause — guard blocked it,
+# the sample timed out, an exception — is visible instead of the generic "ON but STATIC" hint.
+_NUDGE_DEBUG = {}
 # node_id -> Lock: serializes concurrent BUILDS of the same node without holding _LOCK during
 # the slow build, so different nodes build in parallel. Guarded by _LOCK on first insert.
 _BUILDING = {}
@@ -351,6 +355,7 @@ def diag():
         "cursor_quark": _CURSOR_QUARK,
         "probe_cache": cache,
         "cursor_pos": cursor_pos(),
+        "last_nudge_result": dict(_NUDGE_DEBUG),
     }
 
 
@@ -483,6 +488,7 @@ def _nudge_prime(node_id, lpx, lpy, lw, lh, sx, sy):
     guard) or via MCP_SCREEN_NO_NUDGE=1. Lazy `import input` keeps capture's import graph
     acyclic (input imports state + lazily imports capture, not the reverse at module load)."""
     if os.environ.get("MCP_SCREEN_NO_NUDGE") == "1":
+        _NUDGE_DEBUG[node_id] = "skipped: MCP_SCREEN_NO_NUDGE=1"
         return None
     prior = None
     inp = None
@@ -491,7 +497,8 @@ def _nudge_prime(node_id, lpx, lpy, lw, lh, sx, sy):
 
         try:
             inp.guard_user()  # respect user takeover — don't fight for the pointer
-        except Exception:
+        except Exception as e:
+            _NUDGE_DEBUG[node_id] = f"guard_user blocked the nudge: {e}"
             return None
         prior = (
             state.SESSION.get("cmd_cursor") or cursor_pos()
@@ -530,8 +537,13 @@ def _nudge_prime(node_id, lpx, lpy, lw, lh, sx, sy):
             sample = sink.emit("try-pull-sample", 1 * Gst.SECOND)
             if sample is not None:
                 break
-        return _sample_to_rgba(sample) if sample is not None else None
-    except Exception:
+        if sample is None:
+            _NUDGE_DEBUG[node_id] = "wiggled the pointer but no sample arrived within ~3s"
+            return None
+        _NUDGE_DEBUG[node_id] = "primed OK"
+        return _sample_to_rgba(sample)
+    except Exception as e:
+        _NUDGE_DEBUG[node_id] = f"exception: {type(e).__name__}: {e}"
         return None
     finally:
         try:  # restore the pointer wherever the user/we last had it
@@ -848,24 +860,28 @@ def asleep_hint(monitor=None):
     sel = [int(monitor)] if monitor is not None else idle
     which = f"Monitor {int(monitor)}" if monitor is not None else f"Monitor(s) {idle}"
     powers = {geo[i].get("power", "unknown") for i in sel if i < len(geo)}
+    # Debug: why did priming actually fail for these nodes, verbatim from _nudge_prime.
+    dbg = "; ".join(f"node {geo[i]['node']}: {_NUDGE_DEBUG.get(geo[i]['node'], 'not attempted')}"
+                     for i in sel if i < len(geo))
     if powers == {"off"}:
         return (
             f"{which} is ASLEEP (DPMS/power-save): a blanked Wayland output emits no frames, "
             f"so it can't be captured (expected, not a fault). Ask the user to wake that "
             f"monitor (move the mouse onto it or press a key) and bring the target app to the "
-            f"foreground, then retry. Any awake monitor is still capturable."
+            f"foreground, then retry. Any awake monitor is still capturable. [debug: {dbg}]"
         )
     if powers == {"on"}:
         return (
             f"{which} is ON but STATIC — GNOME/Mutter only streams frames on change, so an "
             f"idle screen yields no capture frame until something on it changes. mcp-screen "
-            f"will nudge it to refresh; if it persists, click/scroll on that monitor."
+            f"will nudge it to refresh; if it persists, click/scroll on that monitor. "
+            f"[debug: {dbg}]"
         )
     return (
         f"{which} produced no frame: it is either ASLEEP (DPMS — wake it: move the mouse onto "
         f"it or press a key) or ON but STATIC (GNOME streams on damage, so an idle screen "
         f"yields no frame until something changes — click/scroll on it). mcp-screen already "
-        f"tried nudging it. Any awake monitor is still capturable."
+        f"tried nudging it. Any awake monitor is still capturable. [debug: {dbg}]"
     )
 
 
