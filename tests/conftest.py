@@ -66,7 +66,8 @@ def _install_capture_stub():
     if "capture" in sys.modules:
         return
     cap = cast(Any, types.ModuleType("capture"))
-    cap.cursor_pos = lambda: None
+    cap.cursor_pos = lambda *_a, **_kw: None
+    cap.cursor_sample_age = lambda *_a, **_kw: None
     sys.modules["capture"] = cap
 
 

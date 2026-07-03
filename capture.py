@@ -322,6 +322,21 @@ def cursor_pos(refresh=True, prefer_node=None):
     return (c["gx"], c["gy"]) if c else None
 
 
+def cursor_sample_age(node=None):
+    """Age in seconds of the cached cursor sample cursor_pos(prefer_node=node) would return,
+    or None if there's no sample at all. A STATIC monitor's sample never refreshes, so this
+    can grow unbounded — callers (guard_user) use it to tell "genuinely live reading" from
+    "frozen snapshot from whenever this monitor last painted," which cursor_pos() itself
+    can't distinguish since it returns the pinned sample regardless of freshness."""
+    with _LOCK:
+        items = dict(_CURSOR)
+    if node is not None and node in items:
+        return time.monotonic() - items[node][2]
+    if not items:
+        return None
+    return time.monotonic() - max(t for _, _, t in items.values())
+
+
 def diag():
     """Capture-subsystem health for screen_diag: live pipelines + the probe-fed cursor cache
     (per-node frame px + monotonic age) and the resolved global cursor_pos."""

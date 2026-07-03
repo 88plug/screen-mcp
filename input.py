@@ -56,6 +56,15 @@ BTN = {"left": 0x110, "right": 0x111, "middle": 0x112}
 # between a commanded move and the position the compositor reports back.
 GUARD_THRESH = int(os.environ.get("MCP_SCREEN_GUARD_PX", "40"))
 
+# A STATIC monitor's cursor-metadata sample never refreshes (cursor_pos(prefer_node=...)
+# returns it "regardless of freshness" by design). Without a staleness cutoff, guard_user
+# compares our own varying commanded positions against ONE frozen point forever: it false-
+# fires identically on every subsequent action once tripped, AND blocks capture's own
+# _nudge_prime (which calls guard_user() before priming a fresh frame) from ever refreshing
+# that sample — a self-sustaining false-positive loop. Confirmed live 2026-07-03: repeated
+# STOPPED errors reporting the IDENTICAL "live" position across many unrelated clicks.
+GUARD_STALE_S = float(os.environ.get("MCP_SCREEN_GUARD_STALE_S", "3.0"))
+
 
 class UserControlError(RuntimeError):
     """Raised when the live pointer has drifted off where we last commanded it — the user
@@ -85,6 +94,12 @@ def guard_user(force=False):
     # target is a DIFFERENT monitor's position — a cross-monitor compare that trips the 40px
     # threshold spuriously and aborts a correctly-positioned action.
     node = state.SESSION.get("cmd_node")
+    # A stale-beyond-trust sample can't tell us the user moved anything — it's frozen from
+    # whenever this monitor last painted, not "now." Treat it the same as "can't be read":
+    # fail open rather than compare our own commanded moves against a fixed old point.
+    age = capture.cursor_sample_age(node)
+    if age is not None and age > GUARD_STALE_S:
+        return
     live = (
         capture.cursor_pos(prefer_node=node)
         if node is not None

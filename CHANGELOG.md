@@ -2,6 +2,17 @@
 
 Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
 
+## 2026.7.23
+
+- Fixed the takeover guard false-firing forever on a STATIC monitor: `cursor_pos(prefer_node=...)`
+  pins to a per-node cursor sample that never refreshes once a monitor stops repainting, so
+  `guard_user` compared every subsequent commanded click against ONE frozen point and raised
+  `UserControlError` with the IDENTICAL "live" position every time — also blocking the
+  `_nudge_prime` frame-refresh path that would have fixed it (it calls `guard_user()` too).
+  Added `capture.cursor_sample_age()` and a `MCP_SCREEN_GUARD_STALE_S` (default 3.0s) cutoff:
+  a sample older than that is treated as "can't be read" and fails open, same as today's
+  existing no-cursor fail-open path.
+
 ## 2026.7.21
 
 - `prereqs` matrix in `screen_diag` + `setup.sh` bootstrap (status + `next_step` per dependency).
