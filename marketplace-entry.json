@@ -1,11 +1,20 @@
 {
   "name": "screen-mcp",
   "source": {
-    "source": "github",
-    "repo": "88plug/screen-mcp"
+    "source": "url",
+    "url": "https://github.com/88plug/screen-mcp.git"
   },
   "description": "Eyes and hands on a Linux Wayland desktop: screenshot any monitor and click/type/scroll/drag/read any visible app over xdg-desktop-portal (RemoteDesktop + ScreenCast), with optional OCR + OmniParser icon grounding. Pure-Python, CPU-only. GNOME/Wayland only. Ships the MCP server + a drive-screen skill.",
   "category": "productivity",
-  "tags": ["type:mcp", "wayland", "gnome", "screenshot", "desktop-automation", "ocr", "pipewire", "portal"],
+  "tags": [
+    "type:mcp",
+    "wayland",
+    "gnome",
+    "screenshot",
+    "desktop-automation",
+    "ocr",
+    "pipewire",
+    "portal"
+  ],
   "homepage": "https://github.com/88plug/screen-mcp"
 }
