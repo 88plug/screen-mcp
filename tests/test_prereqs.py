@@ -1,6 +1,6 @@
 """Tests for prereqs.check_all() — no live portal or display required."""
+
 import os
-from unittest import mock
 
 import prereqs
 
@@ -57,7 +57,8 @@ def test_awareness_extension_state_installed_not_loaded(monkeypatch):
     monkeypatch.setattr(awareness, "_call", lambda _m: None)
     monkeypatch.setattr(os.path, "isfile", lambda p: str(p).endswith("extension.js"))
     monkeypatch.setattr(
-        os.path, "expanduser",
+        os.path,
+        "expanduser",
         lambda p: "/fake/window-info@local" if "gnome-shell/extensions" in p else p,
     )
     st = awareness.extension_state()

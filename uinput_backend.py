@@ -13,6 +13,7 @@ land where intended with no portal, no cursor-readback dependency.
 Requires /dev/uinput writable (group `input`, udev rule) + python-evdev. If either is missing
 this module reports unavailable and input.py falls back to the portal path. CPU-only, no GPU.
 """
+
 import os
 import time
 import threading
@@ -25,7 +26,7 @@ except Exception:  # pragma: no cover - evdev / kernel headers absent
 
 _DEV = None
 _LOCK = threading.Lock()
-_W = _H = 0   # native desktop bounds the ABS range is mapped to
+_W = _H = 0  # native desktop bounds the ABS range is mapped to
 
 # Pointer button -> evdev code.
 _BTN = {"left": 0x110, "right": 0x111, "middle": 0x112}  # BTN_LEFT/RIGHT/MIDDLE
@@ -41,7 +42,7 @@ def available():
 def _keycodes_needed():
     """Every KEY_* evdev code we might emit, so the device advertises them at create time
     (a uinput device can only emit keys declared in its capabilities)."""
-    return list(range(1, 248))   # KEY_ESC(1)..KEY_MICMUTE(248): covers all standard keys
+    return list(range(1, 248))  # KEY_ESC(1)..KEY_MICMUTE(248): covers all standard keys
 
 
 def ensure_device(w, h):
@@ -67,18 +68,38 @@ def ensure_device(w, h):
             pass
         _DEV = None
         cap = {
-            e.EV_KEY: [_BTN["left"], _BTN["right"], _BTN["middle"]] + _keycodes_needed(),
+            e.EV_KEY: [_BTN["left"], _BTN["right"], _BTN["middle"]]
+            + _keycodes_needed(),
             e.EV_ABS: [
                 # resolution=1 unit/px: libinput treats an abs device with no resolution as
                 # buggy; 1 unit/px keeps the axis in pixel units mapped 1:1 to the desktop.
-                (e.ABS_X, AbsInfo(value=0, min=0, max=max(1, w - 1), fuzz=0, flat=0, resolution=1)),
-                (e.ABS_Y, AbsInfo(value=0, min=0, max=max(1, h - 1), fuzz=0, flat=0, resolution=1)),
+                (
+                    e.ABS_X,
+                    AbsInfo(
+                        value=0, min=0, max=max(1, w - 1), fuzz=0, flat=0, resolution=1
+                    ),
+                ),
+                (
+                    e.ABS_Y,
+                    AbsInfo(
+                        value=0, min=0, max=max(1, h - 1), fuzz=0, flat=0, resolution=1
+                    ),
+                ),
             ],
-            e.EV_REL: [e.REL_WHEEL, e.REL_WHEEL_HI_RES, e.REL_HWHEEL, e.REL_HWHEEL_HI_RES],
+            e.EV_REL: [
+                e.REL_WHEEL,
+                e.REL_WHEEL_HI_RES,
+                e.REL_HWHEEL,
+                e.REL_HWHEEL_HI_RES,
+            ],
         }
         try:
-            dev = UInput(cap, name="mcp-screen-pointer", version=0x1,
-                         input_props=[e.INPUT_PROP_POINTER])
+            dev = UInput(
+                cap,
+                name="mcp-screen-pointer",
+                version=0x1,
+                input_props=[e.INPUT_PROP_POINTER],
+            )
         except TypeError:
             # older python-evdev without input_props kwarg — create without the prop bit
             dev = UInput(cap, name="mcp-screen-pointer", version=0x1)
@@ -91,18 +112,24 @@ def ensure_device(w, h):
         # x*(1-1/scale); warn so it's diagnosable rather than a silent miss.
         try:
             import state as _st
-            if any((g.get("sx") or 1.0) != 1.0 or (g.get("sy") or 1.0) != 1.0
-                   for g in (_st.SESSION.get("geo") or [])):
-                _st.log("WARN uinput: a monitor has fractional scale; abs-click mapping assumes "
-                        "native==logical (scale 1.0) and may be offset. See uinput_backend notes.")
+
+            if any(
+                (g.get("sx") or 1.0) != 1.0 or (g.get("sy") or 1.0) != 1.0
+                for g in (_st.SESSION.get("geo") or [])
+            ):
+                _st.log(
+                    "WARN uinput: a monitor has fractional scale; abs-click mapping assumes "
+                    "native==logical (scale 1.0) and may be offset. See uinput_backend notes."
+                )
         except Exception:
             pass
-        time.sleep(0.4)   # let udev/libinput enumerate before the first event
+        time.sleep(0.4)  # let udev/libinput enumerate before the first event
         return _DEV
 
 
 def _abs_move(dev, x, y):
-    x = max(0, min(int(x), _W - 1)); y = max(0, min(int(y), _H - 1))
+    x = max(0, min(int(x), _W - 1))
+    y = max(0, min(int(y), _H - 1))
     dev.write(e.EV_ABS, e.ABS_X, x)
     dev.write(e.EV_ABS, e.ABS_Y, y)
     dev.syn()
@@ -132,12 +159,18 @@ def click(x, y, button="left", double=False, in_place=False):
             # Offsetting by a few px guarantees two distinct motion events.
             ox = x + 6 if x + 6 < _W else x - 6
             oy = y + 6 if y + 6 < _H else y - 6
-            _abs_move(dev, ox, oy); time.sleep(0.05)
-            _abs_move(dev, x, y); time.sleep(0.06)
+            _abs_move(dev, ox, oy)
+            time.sleep(0.05)
+            _abs_move(dev, x, y)
+            time.sleep(0.06)
         for _ in range(2 if double else 1):
-            dev.write(e.EV_KEY, code, 1); dev.syn()
-            time.sleep(0.035)   # hold (matches the proven reference recipe; 20ms can be coalesced)
-            dev.write(e.EV_KEY, code, 0); dev.syn()
+            dev.write(e.EV_KEY, code, 1)
+            dev.syn()
+            time.sleep(
+                0.035
+            )  # hold (matches the proven reference recipe; 20ms can be coalesced)
+            dev.write(e.EV_KEY, code, 0)
+            dev.syn()
             time.sleep(0.04)
     return True
 
@@ -153,8 +186,10 @@ def scroll(x, y, dy_notches=0, dx_notches=0, at=True):
             # Position the pointer over the target pane so Chromium gets a wl_pointer.enter and
             # sets focus on that surface — required or it drops the scroll frame. Move twice
             # (a static monitor can need a beat to route the cross-monitor jump).
-            _abs_move(dev, x, y); time.sleep(0.05)
-            _abs_move(dev, x, y); time.sleep(0.08)
+            _abs_move(dev, x, y)
+            time.sleep(0.05)
+            _abs_move(dev, x, y)
+            time.sleep(0.08)
         steps = max(abs(dy_notches), abs(dx_notches))
         vy = 1 if dy_notches > 0 else -1 if dy_notches < 0 else 0
         vx = 1 if dx_notches > 0 else -1 if dx_notches < 0 else 0
@@ -179,13 +214,17 @@ def drag(x1, y1, x2, y2, button="left", steps=20):
         return False
     code = _BTN.get(button, _BTN["left"])
     with _LOCK:
-        _abs_move(dev, x1, y1); time.sleep(0.03)
-        dev.write(e.EV_KEY, code, 1); dev.syn(); time.sleep(0.04)
+        _abs_move(dev, x1, y1)
+        time.sleep(0.03)
+        dev.write(e.EV_KEY, code, 1)
+        dev.syn()
+        time.sleep(0.04)
         for i in range(1, steps + 1):
             _abs_move(dev, x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps)
             time.sleep(0.012)
         time.sleep(0.04)
-        dev.write(e.EV_KEY, code, 0); dev.syn()
+        dev.write(e.EV_KEY, code, 0)
+        dev.syn()
     return True
 
 
@@ -201,19 +240,23 @@ def key_codes(codes):
         return False
     mods, key = (codes[:-1], codes[-1:]) if len(codes) > 1 else ([], codes)
     with _LOCK:
-        for c in mods:                       # press modifiers first
-            dev.write(e.EV_KEY, int(c), 1); dev.syn()
+        for c in mods:  # press modifiers first
+            dev.write(e.EV_KEY, int(c), 1)
+            dev.syn()
         if mods:
-            time.sleep(0.012)                # let the modifier latch propagate before the key
+            time.sleep(0.012)  # let the modifier latch propagate before the key
         for c in key:
-            dev.write(e.EV_KEY, int(c), 1); dev.syn()
-        time.sleep(0.03)                     # hold
+            dev.write(e.EV_KEY, int(c), 1)
+            dev.syn()
+        time.sleep(0.03)  # hold
         for c in reversed(key):
-            dev.write(e.EV_KEY, int(c), 0); dev.syn()
+            dev.write(e.EV_KEY, int(c), 0)
+            dev.syn()
         if mods:
             time.sleep(0.008)
-        for c in reversed(mods):             # release modifiers last
-            dev.write(e.EV_KEY, int(c), 0); dev.syn()
+        for c in reversed(mods):  # release modifiers last
+            dev.write(e.EV_KEY, int(c), 0)
+            dev.syn()
         time.sleep(0.01)
     return True
 
@@ -227,11 +270,18 @@ def type_codes(seq):
     with _LOCK:
         for kc, shift in seq:
             if shift:
-                dev.write(e.EV_KEY, SHIFT, 1); dev.syn(); time.sleep(0.004)
-            dev.write(e.EV_KEY, int(kc), 1); dev.syn(); time.sleep(0.006)
-            dev.write(e.EV_KEY, int(kc), 0); dev.syn()
+                dev.write(e.EV_KEY, SHIFT, 1)
+                dev.syn()
+                time.sleep(0.004)
+            dev.write(e.EV_KEY, int(kc), 1)
+            dev.syn()
+            time.sleep(0.006)
+            dev.write(e.EV_KEY, int(kc), 0)
+            dev.syn()
             if shift:
-                time.sleep(0.004); dev.write(e.EV_KEY, SHIFT, 0); dev.syn()
+                time.sleep(0.004)
+                dev.write(e.EV_KEY, SHIFT, 0)
+                dev.syn()
             time.sleep(0.006)
     return True
 
@@ -239,13 +289,18 @@ def type_codes(seq):
 def _bounds():
     """Native desktop bounds (W,H) from the session geometry; (0,0) if unknown."""
     import state
+
     return int(state.SESSION.get("W") or 0), int(state.SESSION.get("H") or 0)
 
 
 def diag():
-    return {"available": available(), "evdev": evdev is not None,
-            "uinput_writable": os.access("/dev/uinput", os.W_OK) if evdev else False,
-            "device": bool(_DEV), "bounds": [_W, _H]}
+    return {
+        "available": available(),
+        "evdev": evdev is not None,
+        "uinput_writable": os.access("/dev/uinput", os.W_OK) if evdev else False,
+        "device": bool(_DEV),
+        "bounds": [_W, _H],
+    }
 
 
 def shutdown():

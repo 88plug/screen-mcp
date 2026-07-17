@@ -6,6 +6,7 @@ Two patches landed:
   - _clip_paste restores in a `finally` so a paste-side failure can never leave
     the typed text (often a password/token) sitting in the user's clipboard.
 The conftest stubs state and gi so this file imports input safely."""
+
 import types
 
 import pytest
@@ -29,7 +30,13 @@ def test_resolve_xy_desktop_passthrough():
 
 
 def test_resolve_xy_view_applies_view_transform():
-    inp.state.SESSION["view"] = {"ox": 10, "oy": 20, "scale": 0.5, "dw": 1000, "dh": 800}
+    inp.state.SESSION["view"] = {
+        "ox": 10,
+        "oy": 20,
+        "scale": 0.5,
+        "dw": 1000,
+        "dh": 800,
+    }
     # desktop = (ox + x/scale, oy + y/scale) = (10 + 100/0.5, 20 + 50/0.5) = (210, 120)
     assert inp.resolve_xy({"x": 100, "y": 50}) == (210, 120)
 
@@ -46,33 +53,64 @@ def test_resolve_xy_norm_round_trips_to_midpoint():
 
 
 def test_resolve_xy_matching_view_id_resolves_normally():
-    inp.state.SESSION["view"] = {"ox": 10, "oy": 20, "scale": 0.5, "dw": 1000, "dh": 800, "id": 7}
+    inp.state.SESSION["view"] = {
+        "ox": 10,
+        "oy": 20,
+        "scale": 0.5,
+        "dw": 1000,
+        "dh": 800,
+        "id": 7,
+    }
     # coords bound to the CURRENT view#7 resolve as usual.
     assert inp.resolve_xy({"x": 100, "y": 50, "view_id": 7}) == (210, 120)
 
 
 def test_resolve_xy_stale_view_id_raises():
     # coords were read from view#7, but a later screenshot rebound the transform to view#9.
-    inp.state.SESSION["view"] = {"ox": 999, "oy": 999, "scale": 1.0, "dw": 100, "dh": 100, "id": 9}
+    inp.state.SESSION["view"] = {
+        "ox": 999,
+        "oy": 999,
+        "scale": 1.0,
+        "dw": 100,
+        "dh": 100,
+        "id": 9,
+    }
     with pytest.raises(inp.StaleViewError):
         inp.resolve_xy({"x": 100, "y": 50, "view_id": 7})
 
 
 def test_resolve_xy_no_view_id_skips_guard_for_backcompat():
     # without an explicit view_id the guard is inert — legacy callers keep working.
-    inp.state.SESSION["view"] = {"ox": 0, "oy": 0, "scale": 1.0, "dw": 100, "dh": 100, "id": 42}
+    inp.state.SESSION["view"] = {
+        "ox": 0,
+        "oy": 0,
+        "scale": 1.0,
+        "dw": 100,
+        "dh": 100,
+        "id": 42,
+    }
     assert inp.resolve_xy({"x": 100, "y": 50}) == (100, 50)
 
 
 def test_resolve_xy_stale_view_id_ignored_for_desktop_space():
     # desktop coords are transform-independent, so a stale view_id must not block them.
-    inp.state.SESSION["view"] = {"ox": 0, "oy": 0, "scale": 1.0, "dw": 100, "dh": 100, "id": 9}
-    assert inp.resolve_xy({"x": 100, "y": 50, "space": "desktop", "view_id": 7}) == (100, 50)
+    inp.state.SESSION["view"] = {
+        "ox": 0,
+        "oy": 0,
+        "scale": 1.0,
+        "dw": 100,
+        "dh": 100,
+        "id": 9,
+    }
+    assert inp.resolve_xy({"x": 100, "y": 50, "space": "desktop", "view_id": 7}) == (
+        100,
+        50,
+    )
 
 
 def test_global_to_logical_picks_monitor_by_containment_and_scales():
     inp.state.SESSION["geo"] = [
-        {"node": 1, "x": 0,    "y": 0, "w": 1920, "h": 1080, "sx": 1.0, "sy": 1.0},
+        {"node": 1, "x": 0, "y": 0, "w": 1920, "h": 1080, "sx": 1.0, "sy": 1.0},
         {"node": 2, "x": 1920, "y": 0, "w": 2560, "h": 1440, "sx": 2.0, "sy": 2.0},
     ]
     node, lx, ly = inp.global_to_logical(1920 + 960, 540)
@@ -81,14 +119,16 @@ def test_global_to_logical_picks_monitor_by_containment_and_scales():
 
 def test_global_to_logical_falls_back_to_first_monitor_when_outside_all():
     inp.state.SESSION["geo"] = [
-        {"node": 7, "x": 0, "y": 0, "w": 1920, "h": 1080, "sx": 1.0, "sy": 1.0}]
+        {"node": 7, "x": 0, "y": 0, "w": 1920, "h": 1080, "sx": 1.0, "sy": 1.0}
+    ]
     node, _lx, _ly = inp.global_to_logical(-5, -5)
     assert node == 7
 
 
 def test_global_to_logical_treats_zero_scale_as_one():
     inp.state.SESSION["geo"] = [
-        {"node": 3, "x": 0, "y": 0, "w": 1000, "h": 1000, "sx": 0, "sy": 0}]
+        {"node": 3, "x": 0, "y": 0, "w": 1000, "h": 1000, "sx": 0, "sy": 0}
+    ]
     node, lx, ly = inp.global_to_logical(100, 200)
     assert node == 3 and lx == 100.0 and ly == 200.0  # `or 1.0` guards div-by-zero
 
@@ -128,8 +168,9 @@ def _capture_keycodes(monkeypatch):
     """Record every _notify_keycode call (keycode, press_state) — the PRIMARY keyboard path
     (raw evdev keycodes; reliable on Mutter). Fakes GLib so usleep is instant."""
     events = []
-    monkeypatch.setattr(inp, "_notify_keycode",
-                        lambda kc, state: events.append((kc, state)))
+    monkeypatch.setattr(
+        inp, "_notify_keycode", lambda kc, state: events.append((kc, state))
+    )
     monkeypatch.setattr(inp, "GLib", types.SimpleNamespace(usleep=lambda _: None))
     return events
 
@@ -138,8 +179,9 @@ def _capture_keypresses(monkeypatch):
     """Record _notify_keysym calls — the FALLBACK path, used only for tokens we can't map to
     an evdev keycode."""
     events = []
-    monkeypatch.setattr(inp, "_notify_keysym",
-                        lambda ks, state: events.append((ks, state)))
+    monkeypatch.setattr(
+        inp, "_notify_keysym", lambda ks, state: events.append((ks, state))
+    )
     monkeypatch.setattr(inp, "GLib", types.SimpleNamespace(usleep=lambda _: None))
     return events
 
@@ -236,14 +278,19 @@ class _Recorder:
     def __call__(self, cmd, **kw):
         self.calls.append((list(cmd), kw.get("input")))
         if cmd[:1] == ["wl-paste"]:
-            return types.SimpleNamespace(returncode=self._paste_returncode,
-                                         stdout=self._paste_stdout)
+            return types.SimpleNamespace(
+                returncode=self._paste_returncode, stdout=self._paste_stdout
+            )
         return types.SimpleNamespace(returncode=0, stdout=b"")
 
 
-def _install_clip_paste_fakes(monkeypatch, *, paste_returncode=0,
-                              paste_stdout=b"ORIGINAL_USER_CLIPBOARD",
-                              key_side_effect=None):
+def _install_clip_paste_fakes(
+    monkeypatch,
+    *,
+    paste_returncode=0,
+    paste_stdout=b"ORIGINAL_USER_CLIPBOARD",
+    key_side_effect=None,
+):
     rec = _Recorder(paste_returncode=paste_returncode, paste_stdout=paste_stdout)
     monkeypatch.setattr(inp.subprocess, "run", rec)
     monkeypatch.setattr(inp.shutil, "which", lambda name: f"/usr/bin/{name}")
@@ -262,24 +309,32 @@ def test_clip_paste_happy_path_restores_prior_clipboard(monkeypatch):
 
 def test_clip_paste_restores_even_when_paste_raises(monkeypatch):
     """Regression: a portal-side Ctrl+V failure must not leave `text` in the clipboard."""
+
     def boom(args):
         raise RuntimeError("portal blew up on ctrl+v")
+
     rec = _install_clip_paste_fakes(monkeypatch, key_side_effect=boom)
     assert inp._clip_paste("SECRET_TOKEN") is False
     assert rec.calls[-1][0] == ["wl-copy"]
-    assert rec.calls[-1][1] == b"ORIGINAL_USER_CLIPBOARD", \
+    assert rec.calls[-1][1] == b"ORIGINAL_USER_CLIPBOARD", (
         "clipboard MUST be restored even when Ctrl+V raises"
+    )
 
 
 def test_clip_paste_clears_clipboard_when_prev_unreadable(monkeypatch):
     """If we couldn't save the user's clipboard, we must still scrub ours — leaving
     the typed text behind on paste failure is the patched leak."""
+
     def boom(args):
         raise RuntimeError("portal blew up")
-    rec = _install_clip_paste_fakes(monkeypatch, paste_returncode=1, key_side_effect=boom)
+
+    rec = _install_clip_paste_fakes(
+        monkeypatch, paste_returncode=1, key_side_effect=boom
+    )
     inp._clip_paste("ANOTHER_SECRET")
-    assert rec.calls[-1][0] == ["wl-copy", "--clear"], \
+    assert rec.calls[-1][0] == ["wl-copy", "--clear"], (
         "must --clear when prev clipboard was unreadable"
+    )
 
 
 def test_clip_paste_returns_false_when_wl_copy_missing(monkeypatch):
@@ -287,13 +342,17 @@ def test_clip_paste_returns_false_when_wl_copy_missing(monkeypatch):
     assert inp._clip_paste("anything") is False
 
 
-def test_clip_paste_returns_false_when_initial_copy_fails_without_attempting_paste(monkeypatch):
+def test_clip_paste_returns_false_when_initial_copy_fails_without_attempting_paste(
+    monkeypatch,
+):
     """wl-copy --check fails -> we never wrote the clipboard, so there's nothing to undo
     and Ctrl+V must NOT fire."""
+
     def bad_run(cmd, **kw):
         if cmd == ["wl-copy"] and kw.get("input"):
             raise RuntimeError("wl-copy died")
         return types.SimpleNamespace(returncode=0, stdout=b"")
+
     key_calls = []
     monkeypatch.setattr(inp.subprocess, "run", bad_run)
     monkeypatch.setattr(inp.shutil, "which", lambda name: f"/usr/bin/{name}")

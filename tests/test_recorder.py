@@ -4,6 +4,7 @@ Run: python3 tests/test_recorder.py
 Exercises: start -> log_frame -> log_action -> stop, then asserts the JSONL has at
 least meta+screenshot+action lines, that frames/*.webp + replay.html exist, and that
 logging the same image twice dedups to a single file."""
+
 import os
 import sys
 import glob
@@ -24,6 +25,7 @@ def main():
     # below. The pytest wrapper redirects SESS_ROOT to tmp_path; standalone runs
     # use the real ~/.local/share/mcp-screen/sessions/test-sess and need this rmtree.
     import shutil
+
     stale = os.path.join(recorder.SESS_ROOT, sid)
     if os.path.isdir(stale):
         shutil.rmtree(stale, ignore_errors=True)
@@ -39,8 +41,11 @@ def main():
     REC.log_action(
         "click",
         {"x": 50, "y": 30, "button": "left", "shot": True},
-        "clicked left (100,60)", True, 12,
-        resolved=[100, 60], view=view,
+        "clicked left (100,60)",
+        True,
+        12,
+        resolved=[100, 60],
+        view=view,
     )
 
     # Dedup: same image again -> must reuse one frame file.
@@ -64,9 +69,13 @@ def main():
     assert "action" in types, "missing action line"
 
     # meta header is first, has v/session/started; meta footer has ended.
-    assert lines[0]["type"] == "meta" and lines[0]["v"] == 1, "first line not meta header"
+    assert lines[0]["type"] == "meta" and lines[0]["v"] == 1, (
+        "first line not meta header"
+    )
     assert lines[0]["session"] == sid and "started" in lines[0]
-    assert any(e.get("type") == "meta" and "ended" in e for e in lines), "missing meta footer"
+    assert any(e.get("type") == "meta" and "ended" in e for e in lines), (
+        "missing meta footer"
+    )
 
     # action event shape: 'shot' sanitized out, coords + truncation present.
     act = next(e for e in lines if e.get("type") == "action")
@@ -83,7 +92,9 @@ def main():
 
     # seq strictly increments across actions + frames.
     seqs = [e["seq"] for e in lines if "seq" in e]
-    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs), f"seq not monotonic: {seqs}"
+    assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs), (
+        f"seq not monotonic: {seqs}"
+    )
 
     # --- frames + replay.html on disk ---
     webps = sorted(glob.glob(os.path.join(d, "frames", "*.webp")))
@@ -92,7 +103,9 @@ def main():
 
     # --- dedup: 3 frame events logged (img, img, img2) but only 2 files ---
     frame_events = [e for e in lines if e.get("type") == "screenshot"]
-    assert len(frame_events) == 3, f"expected 3 screenshot events, got {len(frame_events)}"
+    assert len(frame_events) == 3, (
+        f"expected 3 screenshot events, got {len(frame_events)}"
+    )
     assert len(webps) == 2, f"dedup failed: expected 2 files, got {len(webps)}"
     # The two identical-image events share an image_ref; the third differs.
     refs = [e["image_ref"] for e in frame_events]
@@ -104,7 +117,7 @@ def main():
     # --- inactive no-op safety: must not raise, must not write ---
     assert REC.stop() is None, "stop() on inactive should return None"
     REC.log_action("click", {"x": 1, "y": 1}, "x", True, 1)  # no-op, no raise
-    REC.log_frame(img, "screenshot")                          # no-op, no raise
+    REC.log_frame(img, "screenshot")  # no-op, no raise
 
     print("ALL ASSERTIONS PASSED")
     print("session dir:", d)

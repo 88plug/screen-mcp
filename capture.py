@@ -17,6 +17,7 @@ prime it (see _nudge_prime).
 
 Imports state (session/portal plumbing). Does NOT open a portal session itself beyond
 calling state.ensure_session() at runtime via ensure_geo()."""
+
 import io
 import os
 import json
@@ -26,13 +27,14 @@ import ctypes
 import threading
 
 import gi
+
 gi.require_version("Gst", "1.0")
 gi.require_version("GstApp", "1.0")
-from gi.repository import Gst, GstApp, GLib  # noqa: F401  (GstApp registers appsink type)
-import numpy as np
-from PIL import Image, ImageDraw
+from gi.repository import Gst, GstApp, GLib  # noqa: E402, F401  (GstApp registers appsink type)
+import numpy as np  # noqa: E402
+from PIL import Image, ImageDraw  # noqa: E402
 
-import state
+import state  # noqa: E402
 
 LANCZOS = Image.Resampling.LANCZOS
 
@@ -57,7 +59,9 @@ def _build_pipe(node_id):
 
     Blocks until caps are negotiated (PLAYING reached, ~5s negotiate) and warms it with a
     pull (~3s) so last_sample is primed. Returns (pipe, sink, fd)."""
-    fd = state.open_pw_fd()   # OWN fd per pipeline; sharing one starves concurrent streams
+    fd = (
+        state.open_pw_fd()
+    )  # OWN fd per pipeline; sharing one starves concurrent streams
     # keepalive-time only re-sends an EXISTING last buffer and resend-last only fires on EOS,
     # so neither primes the FIRST frame of a never-damaged static source — that needs a damage
     # event (ensure_geo's _nudge_prime). They still help once a buffer has flowed.
@@ -65,9 +69,12 @@ def _build_pipe(node_id):
         f"pipewiresrc name=pwsrc fd={fd} path={node_id} keepalive-time=1000 resend-last=true "
         f"! videoconvert ! video/x-raw,format=BGRx "
         f"! appsink name=s sync=false max-buffers=1 leaky-type=downstream "
-        f"emit-signals=false enable-last-sample=true")
+        f"emit-signals=false enable-last-sample=true"
+    )
     sink = pipe.get_by_name("s")
-    src = pipe.get_by_name("pwsrc")   # read the cursor meta HERE; videoconvert strips it downstream
+    src = pipe.get_by_name(
+        "pwsrc"
+    )  # read the cursor meta HERE; videoconvert strips it downstream
     if src is not None:
         pad = src.get_static_pad("src")
         if pad is not None:
@@ -77,7 +84,9 @@ def _build_pipe(node_id):
     pipe.get_state(5 * Gst.SECOND)
     # Warm: prime last_sample. An IDLE/static monitor can be slow to emit its first
     # frame, so block up to ~3s (3 x 1s), breaking as soon as a sample lands.
-    for _ in range(3):   # active monitors deliver in <200ms; idle/DPMS ones never do — fail fast
+    for _ in range(
+        3
+    ):  # active monitors deliver in <200ms; idle/DPMS ones never do — fail fast
         if sink.emit("try-pull-sample", 1 * Gst.SECOND) is not None:
             break
     return pipe, sink, fd
@@ -95,22 +104,25 @@ def _get_sink(node_id):
         if ent is not None:
             return ent["sink"]
         blk = _BUILDING.setdefault(node_id, threading.Lock())
-    with blk:                                    # serialize builds of THIS node only
+    with blk:  # serialize builds of THIS node only
         with _LOCK:
             ent = _PIPES.get(node_id)
             if ent is not None:
                 return ent["sink"]
-        pipe, sink, fd = _build_pipe(node_id)    # slow, lock-free
+        pipe, sink, fd = _build_pipe(node_id)  # slow, lock-free
         with _LOCK:
             ent = _PIPES.get(node_id)
-            if ent is not None:                  # someone built it while we were building
-                redundant = (pipe, fd); winning = ent["sink"]
+            if ent is not None:  # someone built it while we were building
+                redundant = (pipe, fd)
+                winning = ent["sink"]
             else:
                 _PIPES[node_id] = {"pipe": pipe, "sink": sink, "fd": fd}
-                redundant = None; winning = sink
-    if redundant:                                # captured under _LOCK above; a concurrent
-        try:                                     # shutdown() can't KeyError us here
-            redundant[0].set_state(Gst.State.NULL); os.close(redundant[1])
+                redundant = None
+                winning = sink
+    if redundant:  # captured under _LOCK above; a concurrent
+        try:  # shutdown() can't KeyError us here
+            redundant[0].set_state(Gst.State.NULL)
+            os.close(redundant[1])
         except Exception:
             pass
     return winning
@@ -128,7 +140,7 @@ def _sample_to_rgba(sample):
         buf.unmap(mi)
     # Account for row padding via stride, then trim to exactly w*4 bytes/row.
     stride = len(arr) // h
-    arr = arr[:stride * h].reshape((h, stride))[:, :w * 4].reshape((h, w, 4))
+    arr = arr[: stride * h].reshape((h, stride))[:, : w * 4].reshape((h, w, 4))
     # BGRx -> RGBA channel swap (x byte becomes opaque alpha below).
     arr = arr[..., [2, 1, 0, 3]]
     arr = np.ascontiguousarray(arr)
@@ -150,6 +162,7 @@ def _drop(node_id):
         except Exception:
             pass
 
+
 # ---------------------------------------------------------------------------
 # Cursor position (SPA_META_Cursor, via cursor_mode=METADATA)
 #
@@ -167,8 +180,14 @@ _GST.gst_buffer_iterate_meta.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 _CURSOR_QUARK = GLib.quark_from_string("cursor")
 
 
-class _PyWrap(ctypes.Structure):  # PyGObject MiniObject wrapper head: refcnt, type, C ptr
-    _fields_ = [("rc", ctypes.c_ssize_t), ("ty", ctypes.c_void_p), ("obj", ctypes.c_void_p)]
+class _PyWrap(
+    ctypes.Structure
+):  # PyGObject MiniObject wrapper head: refcnt, type, C ptr
+    _fields_ = [
+        ("rc", ctypes.c_ssize_t),
+        ("ty", ctypes.c_void_p),
+        ("obj", ctypes.c_void_p),
+    ]
 
 
 # node_id -> (frame_x, frame_y, monotonic_t), fed by the src-pad probe below. The cursor
@@ -187,8 +206,10 @@ def _cursor_xy_from_buf(buf):
             if not mp:
                 return None
             if ctypes.c_uint32.from_address(mp + 16).value == _CURSOR_QUARK:
-                return (ctypes.c_uint32.from_address(mp + 28).value,
-                        ctypes.c_uint32.from_address(mp + 32).value)
+                return (
+                    ctypes.c_uint32.from_address(mp + 28).value,
+                    ctypes.c_uint32.from_address(mp + 32).value,
+                )
     except Exception:
         return None
 
@@ -228,7 +249,8 @@ def cursor_pos(refresh=True, prefer_node=None):
     with _LOCK:
         items = dict(_CURSOR)
     if prefer_node is not None and prefer_node in items and prefer_node in geo:
-        x, y, t = items[prefer_node]; m = geo[prefer_node]
+        x, y, t = items[prefer_node]
+        m = geo[prefer_node]
         best, bt = (m["x"] + x, m["y"] + y), t
     else:
         best, bt = None, -1.0
@@ -247,11 +269,17 @@ def diag():
     """Capture-subsystem health for screen_diag: live pipelines + the probe-fed cursor cache
     (per-node frame px + monotonic age) and the resolved global cursor_pos."""
     with _LOCK:
-        cache = {nid: {"frame_xy": [x, y], "age_s": round(time.monotonic() - t, 2)}
-                 for nid, (x, y, t) in _CURSOR.items()}
+        cache = {
+            nid: {"frame_xy": [x, y], "age_s": round(time.monotonic() - t, 2)}
+            for nid, (x, y, t) in _CURSOR.items()
+        }
         pipes = list(_PIPES.keys())
-    return {"live_pipelines": pipes, "cursor_quark": _CURSOR_QUARK,
-            "probe_cache": cache, "cursor_pos": cursor_pos()}
+    return {
+        "live_pipelines": pipes,
+        "cursor_quark": _CURSOR_QUARK,
+        "probe_cache": cache,
+        "cursor_pos": cursor_pos(),
+    }
 
 
 def draw_cursor(img, ox, oy):
@@ -266,8 +294,15 @@ def draw_cursor(img, ox, oy):
         return img
     try:
         d = ImageDraw.Draw(img)
-        a = [(lx, ly), (lx, ly + 22), (lx + 6, ly + 16), (lx + 11, ly + 24),
-             (lx + 15, ly + 22), (lx + 10, ly + 14), (lx + 17, ly + 14)]
+        a = [
+            (lx, ly),
+            (lx, ly + 22),
+            (lx + 6, ly + 16),
+            (lx + 11, ly + 24),
+            (lx + 15, ly + 22),
+            (lx + 10, ly + 14),
+            (lx + 17, ly + 14),
+        ]
         d.polygon(a, fill=(255, 255, 255), outline=(0, 0, 0))
     except Exception:
         pass
@@ -289,9 +324,12 @@ def grab(node_id, rebuild=True):
     if sample is None:
         raise RuntimeError(
             f"no frame from node {node_id} (monitor may be off, or ON-but-static — GNOME "
-            f"streams on damage, so an idle screen emits no frame until something changes)")
+            f"streams on damage, so an idle screen emits no frame until something changes)"
+        )
     w, h, arr = _sample_to_rgba(sample)
-    _note_frame(node_id, arr)   # track freshness so screenshots can flag a possibly-stale frame
+    _note_frame(
+        node_id, arr
+    )  # track freshness so screenshots can flag a possibly-stale frame
     return w, h, arr
 
 
@@ -345,6 +383,7 @@ def _power_verdicts(probed):
     tell, so 'unknown'. Best-effort: never raises."""
     try:
         import awareness
+
         active = awareness.monitor_power()
     except Exception:
         active = []
@@ -375,11 +414,14 @@ def _nudge_prime(node_id, lpx, lpy, lw, lh, sx, sy):
         return None
     try:
         import input as inp  # lazy: input lazily imports capture; importing it at top would cycle
+
         try:
-            inp.guard_user()        # respect user takeover — don't fight for the pointer
+            inp.guard_user()  # respect user takeover — don't fight for the pointer
         except Exception:
             return None
-        prior = state.SESSION.get("cmd_cursor") or cursor_pos()  # restore target (real pos if unmoved this session)
+        prior = (
+            state.SESSION.get("cmd_cursor") or cursor_pos()
+        )  # restore target (real pos if unmoved this session)
         # Damage target in GLOBAL native px (the space _goto expects). Prefer wiggling IN PLACE at
         # the current pointer when it's already ON this monitor — a ±3px nudge is enough damage and
         # near-invisible, vs jumping to monitor center (disruptive, and this now runs per fresh
@@ -390,12 +432,15 @@ def _nudge_prime(node_id, lpx, lpy, lw, lh, sx, sy):
             gx, gy = int(prior[0]), int(prior[1])
         else:
             gx, gy = int(x0 + mw / 2), int(y0 + mh / 2)
-        wx = gx + 3 if gx + 3 < x0 + mw else gx - 3   # tiny wiggle: ensure a fresh damage region
+        wx = (
+            gx + 3 if gx + 3 < x0 + mw else gx - 3
+        )  # tiny wiggle: ensure a fresh damage region
         wy = gy + 3 if gy + 3 < y0 + mh else gy - 3
         # uinput abs-move is reliable for static monitors (kernel-level, bypasses portal coalescing).
         # Portal _goto is the fallback (unreliable on idle screens but requires no evdev dep).
         if inp._use_uinput():
             import uinput_backend as _ui
+
             _ui.move(gx, gy)
             if GLib is not None:
                 GLib.usleep(20000)
@@ -407,7 +452,7 @@ def _nudge_prime(node_id, lpx, lpy, lw, lh, sx, sy):
             inp._goto(wx, wy)
         sink = _get_sink(node_id)
         sample = None
-        for _ in range(3):          # up to ~3s for the damaged frame to arrive
+        for _ in range(3):  # up to ~3s for the damaged frame to arrive
             sample = sink.emit("try-pull-sample", 1 * Gst.SECOND)
             if sample is not None:
                 break
@@ -415,10 +460,11 @@ def _nudge_prime(node_id, lpx, lpy, lw, lh, sx, sy):
     except Exception:
         return None
     finally:
-        try:                        # restore the pointer wherever the user/we last had it
+        try:  # restore the pointer wherever the user/we last had it
             if prior is not None:
                 if inp._use_uinput():
                     import uinput_backend as _ui
+
                     _ui.move(int(prior[0]), int(prior[1]))
                 else:
                     inp._goto(int(prior[0]), int(prior[1]))
@@ -434,11 +480,20 @@ def _grab_or_prime(m):
     try:
         return grab(m["node"], rebuild=False)
     except Exception:
-        primed = _nudge_prime(m["node"], m["lpx"], m["lpy"], m["lw"], m["lh"],
-                              m.get("sx", 1.0) or 1.0, m.get("sy", 1.0) or 1.0)
+        primed = _nudge_prime(
+            m["node"],
+            m["lpx"],
+            m["lpy"],
+            m["lw"],
+            m["lh"],
+            m.get("sx", 1.0) or 1.0,
+            m.get("sy", 1.0) or 1.0,
+        )
         if primed is not None:
             return primed
-        return grab(m["node"])   # last resort: full rebuild path (raises with the asleep msg)
+        return grab(
+            m["node"]
+        )  # last resort: full rebuild path (raises with the asleep msg)
 
 
 # Per-node signature of the last frame we returned — lets us detect a keepalive RESEND (the
@@ -452,9 +507,11 @@ _LAST_SIG = {}
 # changed since, we'd silently report old pixels as current. We can't tell "old-but-accurate"
 # from "old-and-wrong" without a fresh frame, so we surface the frame's AGE and let screenshots
 # flag the risk (see _stale_note) instead of asserting staleness either way.
-_CHG_SIG = {}          # node -> last frame signature (for change detection)
-_LAST_CHANGE_T = {}    # node -> monotonic time the signature last changed
-STALE_AGE_S = float(os.environ.get("MCP_SCREEN_STALE_AGE_S", "1.5"))   # older => flag stale-risk
+_CHG_SIG = {}  # node -> last frame signature (for change detection)
+_LAST_CHANGE_T = {}  # node -> monotonic time the signature last changed
+STALE_AGE_S = float(
+    os.environ.get("MCP_SCREEN_STALE_AGE_S", "1.5")
+)  # older => flag stale-risk
 
 
 def _note_frame(node_id, arr):
@@ -484,16 +541,23 @@ def _stale_note(ox, oy, dw, dh):
     geo = state.SESSION.get("geo") or []
     stale = []
     for i, m in enumerate(geo):
-        if ox + dw <= m["x"] or ox >= m["x"] + m["w"] or oy + dh <= m["y"] or oy >= m["y"] + m["h"]:
+        if (
+            ox + dw <= m["x"]
+            or ox >= m["x"] + m["w"]
+            or oy + dh <= m["y"]
+            or oy >= m["y"] + m["h"]
+        ):
             continue
         age = frame_age(m["node"])
         if age is not None and age >= STALE_AGE_S:
             stale.append(f"monitor {i} ~{int(age)}s")
     if not stale:
         return ""
-    return (f"  ⚠ STALE-RISK ({', '.join(stale)} since last change): this monitor is STATIC, so the "
-            f"frame may NOT reflect the live screen if it changed without the screencast catching it. "
-            f"Do NOT assert this is current — pass fresh=true, or click/scroll that monitor to confirm.")
+    return (
+        f"  ⚠ STALE-RISK ({', '.join(stale)} since last change): this monitor is STATIC, so the "
+        f"frame may NOT reflect the live screen if it changed without the screencast catching it. "
+        f"Do NOT assert this is current — pass fresh=true, or click/scroll that monitor to confirm."
+    )
 
 
 def _sig(arr):
@@ -518,12 +582,21 @@ def force_fresh_grab(m):
     w, h, arr = _grab_or_prime(m)
     sig = _sig(arr)
     if (not m.get("live")) or (sig is not None and sig == _LAST_SIG.get(nid)):
-        primed = _nudge_prime(nid, m["lpx"], m["lpy"], m["lw"], m["lh"],
-                              m.get("sx", 1.0) or 1.0, m.get("sy", 1.0) or 1.0)
+        primed = _nudge_prime(
+            nid,
+            m["lpx"],
+            m["lpy"],
+            m["lw"],
+            m["lh"],
+            m.get("sx", 1.0) or 1.0,
+            m.get("sy", 1.0) or 1.0,
+        )
         if primed is not None:
             w, h, arr = primed
             sig = _sig(arr)
-            _note_frame(nid, arr)   # the damage-primed frame is current — reset its freshness age
+            _note_frame(
+                nid, arr
+            )  # the damage-primed frame is current — reset its freshness age
     _LAST_SIG[nid] = sig
     return w, h, arr
 
@@ -534,8 +607,15 @@ def _prime_static(mons):
     for m in mons:
         if not m.get("live"):
             try:
-                _nudge_prime(m["node"], m["lpx"], m["lpy"], m["lw"], m["lh"],
-                             m.get("sx", 1.0) or 1.0, m.get("sy", 1.0) or 1.0)
+                _nudge_prime(
+                    m["node"],
+                    m["lpx"],
+                    m["lpy"],
+                    m["lw"],
+                    m["lh"],
+                    m.get("sx", 1.0) or 1.0,
+                    m.get("sy", 1.0) or 1.0,
+                )
             except Exception:
                 pass
 
@@ -559,11 +639,19 @@ def ensure_geo(force=False):
             fw, fh, _arr = grab(node_id, rebuild=False)
             probe_res[idx] = (fw, fh, True)
         except Exception as e:  # noqa: BLE001  (off, or ON-but-static: no first frame yet)
-            state.log("WARN no frame from", node_id, ":", e, "(no frame; registering by metadata)")
+            state.log(
+                "WARN no frame from",
+                node_id,
+                ":",
+                e,
+                "(no frame; registering by metadata)",
+            )
             probe_res[idx] = (None, None, False)
 
-    threads = [threading.Thread(target=_probe, args=(i, nid))
-               for i, (nid, _props) in enumerate(streams)]
+    threads = [
+        threading.Thread(target=_probe, args=(i, nid))
+        for i, (nid, _props) in enumerate(streams)
+    ]
     for t in threads:
         t.start()
     for t in threads:
@@ -583,14 +671,28 @@ def ensure_geo(force=False):
         geo = []
         for (node_id, lpx, lpy, lw, lh, fw, fh, live), pw in zip(probed, power):
             if live:
-                sx = fw / lw if lw else 1.0; sy = fh / lh if lh else 1.0
+                sx = fw / lw if lw else 1.0
+                sy = fh / lh if lh else 1.0
             else:
-                sx, sy = dsx, dsy; fw, fh = round(lw * sx), round(lh * sy)
-            geo.append({
-                "node": node_id, "x": round(lpx * sx), "y": round(lpy * sy),
-                "w": fw, "h": fh, "sx": sx, "sy": sy,
-                "lpx": lpx, "lpy": lpy, "lw": lw, "lh": lh, "live": live, "power": pw,
-            })
+                sx, sy = dsx, dsy
+                fw, fh = round(lw * sx), round(lh * sy)
+            geo.append(
+                {
+                    "node": node_id,
+                    "x": round(lpx * sx),
+                    "y": round(lpy * sy),
+                    "w": fw,
+                    "h": fh,
+                    "sx": sx,
+                    "sy": sy,
+                    "lpx": lpx,
+                    "lpy": lpy,
+                    "lw": lw,
+                    "lh": lh,
+                    "live": live,
+                    "power": pw,
+                }
+            )
         if not geo:
             raise RuntimeError("ensure_geo: no streams")
         state.SESSION["geo"] = geo
@@ -608,7 +710,8 @@ def ensure_geo(force=False):
     for row, pw in zip(probed, power):
         if row[7] or pw == "off":
             continue
-        sx0 = dsx if row[3] else 1.0; sy0 = dsy if row[4] else 1.0
+        sx0 = dsx if row[3] else 1.0
+        sy0 = dsy if row[4] else 1.0
         primed = _nudge_prime(row[0], row[1], row[2], row[3], row[4], sx0, sy0)
         if primed is not None:
             row[5], row[6], row[7] = primed[0], primed[1], True
@@ -623,8 +726,16 @@ def monitors_for(region):
     if not region:
         return geo
     rx, ry, rw, rh = region
-    hit = [m for m in geo if not (rx + rw <= m["x"] or rx >= m["x"] + m["w"]
-                                  or ry + rh <= m["y"] or ry >= m["y"] + m["h"])]
+    hit = [
+        m
+        for m in geo
+        if not (
+            rx + rw <= m["x"]
+            or rx >= m["x"] + m["w"]
+            or ry + rh <= m["y"]
+            or ry >= m["y"] + m["h"]
+        )
+    ]
     return hit or geo
 
 
@@ -642,7 +753,7 @@ def _full_canvas(mons):
         ch = min(h, canvas.shape[0] - m["y"])
         cw = min(w, canvas.shape[1] - m["x"])
         if ch > 0 and cw > 0:
-            canvas[m["y"]:m["y"] + ch, m["x"]:m["x"] + cw] = arr[:ch, :cw]
+            canvas[m["y"] : m["y"] + ch, m["x"] : m["x"] + cw] = arr[:ch, :cw]
     return Image.fromarray(canvas, "RGBA")
 
 
@@ -664,18 +775,24 @@ def asleep_hint(monitor=None):
     which = f"Monitor {int(monitor)}" if monitor is not None else f"Monitor(s) {idle}"
     powers = {geo[i].get("power", "unknown") for i in sel if i < len(geo)}
     if powers == {"off"}:
-        return (f"{which} is ASLEEP (DPMS/power-save): a blanked Wayland output emits no frames, "
-                f"so it can't be captured (expected, not a fault). Ask the user to wake that "
-                f"monitor (move the mouse onto it or press a key) and bring the target app to the "
-                f"foreground, then retry. Any awake monitor is still capturable.")
+        return (
+            f"{which} is ASLEEP (DPMS/power-save): a blanked Wayland output emits no frames, "
+            f"so it can't be captured (expected, not a fault). Ask the user to wake that "
+            f"monitor (move the mouse onto it or press a key) and bring the target app to the "
+            f"foreground, then retry. Any awake monitor is still capturable."
+        )
     if powers == {"on"}:
-        return (f"{which} is ON but STATIC — GNOME/Mutter only streams frames on change, so an "
-                f"idle screen yields no capture frame until something on it changes. mcp-screen "
-                f"will nudge it to refresh; if it persists, click/scroll on that monitor.")
-    return (f"{which} produced no frame: it is either ASLEEP (DPMS — wake it: move the mouse onto "
-            f"it or press a key) or ON but STATIC (GNOME streams on damage, so an idle screen "
-            f"yields no frame until something changes — click/scroll on it). mcp-screen already "
-            f"tried nudging it. Any awake monitor is still capturable.")
+        return (
+            f"{which} is ON but STATIC — GNOME/Mutter only streams frames on change, so an "
+            f"idle screen yields no capture frame until something on it changes. mcp-screen "
+            f"will nudge it to refresh; if it persists, click/scroll on that monitor."
+        )
+    return (
+        f"{which} produced no frame: it is either ASLEEP (DPMS — wake it: move the mouse onto "
+        f"it or press a key) or ON but STATIC (GNOME streams on damage, so an idle screen "
+        f"yields no frame until something changes — click/scroll on it). mcp-screen already "
+        f"tried nudging it. Any awake monitor is still capturable."
+    )
 
 
 def capture_desktop(region=None, monitor=None, fresh=False):
@@ -707,7 +824,9 @@ def capture_desktop(region=None, monitor=None, fresh=False):
             if wh and (wh[0] != m["w"] or wh[1] != m["h"]):
                 geo = ensure_geo(force=True)
                 break
-    if isinstance(region, str):     # tolerate a stringified "[x,y,w,h]" (e.g. an undeclared arg)
+    if isinstance(
+        region, str
+    ):  # tolerate a stringified "[x,y,w,h]" (e.g. an undeclared arg)
         try:
             region = json.loads(region)
         except Exception:
@@ -721,7 +840,13 @@ def capture_desktop(region=None, monitor=None, fresh=False):
             # Static-monitor fallback: the single-monitor grab can fail (and its rebuild path goes
             # COLD) where the composite — which never rebuilds and tolerates a no-frame monitor —
             # still returns that node's last frame. Crop the native composite instead of erroring.
-            return _full_canvas(geo).crop((m["x"], m["y"], m["x"] + m["w"], m["y"] + m["h"])), m["x"], m["y"]
+            return (
+                _full_canvas(geo).crop(
+                    (m["x"], m["y"], m["x"] + m["w"], m["y"] + m["h"])
+                ),
+                m["x"],
+                m["y"],
+            )
     if region:
         rx, ry, rw, rh = [int(v) for v in region]
         mons = monitors_for([rx, ry, rw, rh])
@@ -731,10 +856,13 @@ def capture_desktop(region=None, monitor=None, fresh=False):
                 w, h, arr = _grab1(m)
                 img = Image.fromarray(arr, "RGBA")
                 cx, cy = rx - m["x"], ry - m["y"]
-                return (img.crop((max(0, cx), max(0, cy), cx + rw, cy + rh)),
-                        max(rx, m["x"]), max(ry, m["y"]))
+                return (
+                    img.crop((max(0, cx), max(0, cy), cx + rw, cy + rh)),
+                    max(rx, m["x"]),
+                    max(ry, m["y"]),
+                )
             except Exception:
-                pass   # fall through to the composite crop (robust for a static monitor)
+                pass  # fall through to the composite crop (robust for a static monitor)
         if fresh:
             _prime_static(mons)
         return _full_canvas(mons).crop((rx, ry, rx + rw, ry + rh)), rx, ry
@@ -753,10 +881,20 @@ def encode_store(img, ox, oy, label, t0, max_edge=None):
     le = max(dw, dh)
     me = int(max_edge) if max_edge else state.MAX_EDGE
     scale = min(1.0, me / le) if le else 1.0
-    out = img if scale >= 1.0 else img.resize(
-        (max(1, round(dw * scale)), max(1, round(dh * scale))), LANCZOS)
+    out = (
+        img
+        if scale >= 1.0
+        else img.resize((max(1, round(dw * scale)), max(1, round(dh * scale))), LANCZOS)
+    )
     vid = state.next_view_id()
-    state.SESSION["view"] = {"ox": ox, "oy": oy, "scale": scale, "dw": dw, "dh": dh, "id": vid}
+    state.SESSION["view"] = {
+        "ox": ox,
+        "oy": oy,
+        "scale": scale,
+        "dw": dw,
+        "dh": dh,
+        "id": vid,
+    }
     buf = io.BytesIO()
     if max_edge and me < state.MAX_EDGE:
         out.convert("RGB").save(buf, format="WEBP", quality=80, method=4)
@@ -764,13 +902,23 @@ def encode_store(img, ox, oy, label, t0, max_edge=None):
         out.convert("RGBA").save(buf, format="WEBP", lossless=True)
     raw = buf.getvalue()
     ms = int((time.time() - t0) * 1000)
-    txt = (f"{label}: view#{vid} {out.width}x{out.height} (scale {scale:.4f}) covering desktop "
-           f"origin=({ox},{oy}) size={dw}x{dh}. {len(raw) // 1024}KB, {ms}ms. "
-           f"Click with space='view' using coords as seen here (pass view_id={vid} to bind "
-           f"the click to THIS screenshot).")
-    txt += _stale_note(ox, oy, dw, dh)   # flag a possibly-stale static monitor — never report old pixels as live
-    return [{"type": "text", "text": txt},
-            {"type": "image", "data": base64.b64encode(raw).decode(), "mimeType": "image/webp"}]
+    txt = (
+        f"{label}: view#{vid} {out.width}x{out.height} (scale {scale:.4f}) covering desktop "
+        f"origin=({ox},{oy}) size={dw}x{dh}. {len(raw) // 1024}KB, {ms}ms. "
+        f"Click with space='view' using coords as seen here (pass view_id={vid} to bind "
+        f"the click to THIS screenshot)."
+    )
+    txt += _stale_note(
+        ox, oy, dw, dh
+    )  # flag a possibly-stale static monitor — never report old pixels as live
+    return [
+        {"type": "text", "text": txt},
+        {
+            "type": "image",
+            "data": base64.b64encode(raw).decode(),
+            "mimeType": "image/webp",
+        },
+    ]
 
 
 def shutdown():

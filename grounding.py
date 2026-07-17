@@ -12,6 +12,7 @@ element list — it never raises. This keeps the core server runnable on a box t
 only numpy + Pillow installed.
 
 No imports from server.py / state.py here (avoids circular deps)."""
+
 import os
 import threading
 
@@ -24,6 +25,7 @@ from PIL import Image, ImageDraw, ImageFont
 # ---------------------------------------------------------------------------
 try:
     import cv2  # type: ignore
+
     _HAVE_CV = True
 except Exception:  # pragma: no cover - depends on host deps
     cv2 = None  # type: ignore
@@ -31,6 +33,7 @@ except Exception:  # pragma: no cover - depends on host deps
 
 try:
     from rapidocr import RapidOCR  # type: ignore
+
     _HAVE_OCR = True
 except Exception:  # pragma: no cover - depends on host deps
     RapidOCR = None  # type: ignore
@@ -39,9 +42,12 @@ except Exception:  # pragma: no cover - depends on host deps
 # OmniParser icon_detect (YOLOv8 exported to ONNX) — CPU-only, NO torch. Bundled at
 # models/onnx/model.onnx. This is the primary interactable-element detector; the
 # classical-CV path is only a fallback when this model/onnxruntime is unavailable.
-_OMNI_MODEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "onnx", "model.onnx")
+_OMNI_MODEL = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "models", "onnx", "model.onnx"
+)
 try:
     import onnxruntime as _ort  # type: ignore
+
     _HAVE_OMNI = os.path.exists(_OMNI_MODEL)
 except Exception:
     _ort = None  # type: ignore
@@ -51,8 +57,8 @@ except Exception:
 # (OCR, OmniParser ONNX) has its own lock so first-use under concurrent tool calls
 # double-checks safely without two threads building two sessions in parallel — and so
 # OCR and OmniParser cold-starts can still run in parallel (they're independent).
-_OCR = None      # type: ignore
-_FONT = None     # type: ignore
+_OCR = None  # type: ignore
+_FONT = None  # type: ignore
 _OMNI_SESS = None  # type: ignore
 _OCR_LOCK = threading.Lock()
 _OMNI_LOCK = threading.Lock()
@@ -107,7 +113,7 @@ def ocr_boxes(bgr):
         return []
     try:
         if _OCR is None:
-            with _OCR_LOCK:        # double-checked: a second concurrent caller must not build a second engine
+            with _OCR_LOCK:  # double-checked: a second concurrent caller must not build a second engine
                 if _OCR is None:
                     _OCR = RapidOCR()
         res = _OCR(bgr)
@@ -189,11 +195,13 @@ def cv_regions(bgr):
         aspect = w / float(h)
         if aspect < 0.05 or aspect > 20.0:
             continue
-        out.append({
-            "label": "icon",
-            "role": "icon",
-            "bbox": [int(x), int(y), int(x + w), int(y + h)],
-        })
+        out.append(
+            {
+                "label": "icon",
+                "role": "icon",
+                "bbox": [int(x), int(y), int(x + w), int(y + h)],
+            }
+        )
     return out
 
 
@@ -203,23 +211,31 @@ def cv_regions(bgr):
 def _omni_session():
     global _OMNI_SESS
     if _OMNI_SESS is None:
-        with _OMNI_LOCK:           # double-checked: avoid two ONNX sessions racing on first call
+        with _OMNI_LOCK:  # double-checked: avoid two ONNX sessions racing on first call
             if _OMNI_SESS is None:
                 so = _ort.SessionOptions()
-                so.intra_op_num_threads = int(os.environ.get("MCP_SCREEN_CPU_THREADS", "6"))
+                so.intra_op_num_threads = int(
+                    os.environ.get("MCP_SCREEN_CPU_THREADS", "6")
+                )
                 so.inter_op_num_threads = 1
-                _OMNI_SESS = _ort.InferenceSession(_OMNI_MODEL, sess_options=so,
-                                                   providers=["CPUExecutionProvider"])
+                _OMNI_SESS = _ort.InferenceSession(
+                    _OMNI_MODEL, sess_options=so, providers=["CPUExecutionProvider"]
+                )
     return _OMNI_SESS
 
 
 def diag():
     """Grounding-subsystem health for screen_diag: which backends loaded + whether the
     (lazy) OCR / OmniParser sessions have been warmed yet."""
-    return {"have_omni": _HAVE_OMNI, "have_ocr": _HAVE_OCR, "have_cv": _HAVE_CV,
-            "omni_model": _OMNI_MODEL, "omni_warmed": _OMNI_SESS is not None,
-            "ocr_warmed": _OCR is not None,
-            "cpu_threads": int(os.environ.get("MCP_SCREEN_CPU_THREADS", "6"))}
+    return {
+        "have_omni": _HAVE_OMNI,
+        "have_ocr": _HAVE_OCR,
+        "have_cv": _HAVE_CV,
+        "omni_model": _OMNI_MODEL,
+        "omni_warmed": _OMNI_SESS is not None,
+        "ocr_warmed": _OCR is not None,
+        "cpu_threads": int(os.environ.get("MCP_SCREEN_CPU_THREADS", "6")),
+    }
 
 
 def warmup():
@@ -229,12 +245,14 @@ def warmup():
     global _OCR
     try:
         if _HAVE_OMNI:
-            _omni_session()           # self-locks via _OMNI_LOCK
+            _omni_session()  # self-locks via _OMNI_LOCK
     except Exception:
         pass
     try:
         if _HAVE_OCR and _OCR is None:
-            with _OCR_LOCK:           # match ocr_boxes()' double-checked init so warmup races safely
+            with (
+                _OCR_LOCK
+            ):  # match ocr_boxes()' double-checked init so warmup races safely
                 if _OCR is None:
                     _OCR = RapidOCR()
                     _OCR(np.zeros((48, 48, 3), dtype=np.uint8))  # prime det+rec graphs
@@ -257,27 +275,40 @@ def omni_regions(bgr, conf=0.05, iou=0.45, imgsz=640):
         nh, nw = int(round(H * r)), int(round(W * r))
         canvas = np.full((imgsz, imgsz, 3), 114, dtype=np.uint8)
         top, left = (imgsz - nh) // 2, (imgsz - nw) // 2
-        canvas[top:top + nh, left:left + nw] = cv2.resize(bgr, (nw, nh))
+        canvas[top : top + nh, left : left + nw] = cv2.resize(bgr, (nw, nh))
         rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
         x = np.ascontiguousarray(np.transpose(rgb, (2, 0, 1))[None])
-        out = sess.run(None, {sess.get_inputs()[0].name: x})[0]  # (1,5,N) = cx,cy,w,h,conf
+        out = sess.run(None, {sess.get_inputs()[0].name: x})[
+            0
+        ]  # (1,5,N) = cx,cy,w,h,conf
         pred = out[0].T
         pred = pred[pred[:, 4] > conf]
         if len(pred) == 0:
             return []
         cx, cy, bw, bh, sc = pred[:, 0], pred[:, 1], pred[:, 2], pred[:, 3], pred[:, 4]
         x1, y1 = cx - bw / 2, cy - bh / 2
-        idxs = cv2.dnn.NMSBoxes(np.stack([x1, y1, bw, bh], 1).tolist(), sc.tolist(), conf, iou)
+        idxs = cv2.dnn.NMSBoxes(
+            np.stack([x1, y1, bw, bh], 1).tolist(), sc.tolist(), conf, iou
+        )
         if idxs is None or len(idxs) == 0:
             return []
         out_els = []
         for i in np.array(idxs).flatten():
             ox1, oy1 = (x1[i] - left) / r, (y1[i] - top) / r
             ox2, oy2 = (x1[i] + bw[i] - left) / r, (y1[i] + bh[i] - top) / r
-            out_els.append({
-                "label": "icon", "role": "icon", "conf": float(sc[i]),
-                "bbox": [int(max(0, ox1)), int(max(0, oy1)), int(min(W, ox2)), int(min(H, oy2))],
-            })
+            out_els.append(
+                {
+                    "label": "icon",
+                    "role": "icon",
+                    "conf": float(sc[i]),
+                    "bbox": [
+                        int(max(0, ox1)),
+                        int(max(0, oy1)),
+                        int(min(W, ox2)),
+                        int(min(H, oy2)),
+                    ],
+                }
+            )
         return out_els
     except Exception:
         return []
@@ -316,7 +347,7 @@ def merge(*lists, iou=0.6):
     text LAST to bias toward keeping the icon/widget proposals. Does not assign ids."""
     kept = []
     for lst in lists:
-        for el in (lst or []):
+        for el in lst or []:
             bbox = el.get("bbox")
             if not bbox:
                 continue
@@ -362,10 +393,10 @@ def draw_som(pil, elements):
         draw.rectangle([x1, y1, x2, y2], outline=red, width=2)
         label = str(el["id"])
         try:
-            l, t, r, b = draw.textbbox((0, 0), label, font=font)
-            tw, th = r - l, b - t
+            left, top, right, bottom = draw.textbbox((0, 0), label, font=font)
+            tw, th = right - left, bottom - top
         except Exception:
-            l = t = 0
+            left = top = 0
             tw, th = 8 * len(label), 16
         pad = 2
         tag_w = tw + 2 * pad
@@ -378,7 +409,7 @@ def draw_som(pil, elements):
         tx1 = x1
         draw.rectangle([tx1, ty1, tx1 + tag_w, ty1 + tag_h], fill=red)
         # Subtract the glyph offset (l, t) so text sits snugly inside the tag.
-        draw.text((tx1 + pad - l, ty1 + pad - t), label, fill=white, font=font)
+        draw.text((tx1 + pad - left, ty1 + pad - top), label, fill=white, font=font)
     return img
 
 
@@ -416,28 +447,40 @@ def annotate(image, use_ocr=True, use_cv=None, use_omni=True):
     text_els = []
     if want_ocr:
         for t in ocr_boxes(bgr):
-            text_els.append({"label": t.get("text", ""), "role": "text", "bbox": t["bbox"]})
+            text_els.append(
+                {"label": t.get("text", ""), "role": "text", "bbox": t["bbox"]}
+            )
 
     icon_els = omni_regions(bgr) if want_omni else (cv_regions(bgr) if want_cv else [])
 
     # Name each interactable box by the OCR text inside it (icon -> button "Save").
     for ic in icon_els:
-        names = [t["label"] for t in text_els if t.get("label") and _contains(ic["bbox"], t["bbox"])]
+        names = [
+            t["label"]
+            for t in text_els
+            if t.get("label") and _contains(ic["bbox"], t["bbox"])
+        ]
         if names:
             ic["label"] = " ".join(names)[:60]
             ic["role"] = "button"
     # Standalone text = text NOT inside any interactable box (tabs, links, table cells).
-    standalone = [t for t in text_els if not any(_contains(ic["bbox"], t["bbox"]) for ic in icon_els)]
+    standalone = [
+        t
+        for t in text_els
+        if not any(_contains(ic["bbox"], t["bbox"]) for ic in icon_els)
+    ]
 
     merged = merge(icon_els, standalone, iou=0.5)
     elements = []
     for i, el in enumerate(merged):
-        elements.append({
-            "id": i,
-            "label": el.get("label", ""),
-            "role": el.get("role", "element"),
-            "bbox": [int(v) for v in el["bbox"]],
-        })
+        elements.append(
+            {
+                "id": i,
+                "label": el.get("label", ""),
+                "role": el.get("role", "element"),
+                "bbox": [int(v) for v in el["bbox"]],
+            }
+        )
 
     annotated = draw_som(pil, elements)
     return annotated, elements

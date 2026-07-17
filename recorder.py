@@ -23,6 +23,7 @@ Coordinate model (shared with capture.py / input.py):
   desktop -> view-pixel via (coord-o)*scale, then scale again by the ratio of the stored
   WebP's displayed size to the view's rendered size (dw*scale). replay.html does this.
 """
+
 import os
 import io
 import json
@@ -37,9 +38,9 @@ from PIL import Image
 # Config (env-overridable)
 # ---------------------------------------------------------------------------
 SESS_ROOT = os.path.expanduser("~/.local/share/mcp-screen/sessions")
-REC_CAP = int(os.environ.get("MCP_SCREEN_REC_CAP", "30"))    # keep newest N sessions
+REC_CAP = int(os.environ.get("MCP_SCREEN_REC_CAP", "30"))  # keep newest N sessions
 REC_EDGE = int(os.environ.get("MCP_SCREEN_REC_EDGE", "1280"))  # frame long-edge px
-REC_QUALITY = 80                                              # WebP quality (lossy)
+REC_QUALITY = 80  # WebP quality (lossy)
 
 LANCZOS = Image.Resampling.LANCZOS
 
@@ -65,11 +66,11 @@ class Recorder:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._dir = None          # active session dir, or None
-        self._fh = None           # open trajectory.jsonl handle (line-buffered)
-        self._seq = 0             # monotonic across actions + frames
-        self._hashes = {}         # sha256 -> image_ref (frames/NNNNNN.webp) for dedup
-        self._session = None      # active session id
+        self._dir = None  # active session dir, or None
+        self._fh = None  # open trajectory.jsonl handle (line-buffered)
+        self._seq = 0  # monotonic across actions + frames
+        self._hashes = {}  # sha256 -> image_ref (frames/NNNNNN.webp) for dedup
+        self._session = None  # active session id
 
     # -- lifecycle ---------------------------------------------------------
     def active(self):
@@ -95,10 +96,16 @@ class Recorder:
                 self._seq = 0
                 self._hashes = {}
                 self._session = sid
-                self._write_locked({
-                    "v": 1, "type": "meta", "session": sid,
-                    "started": _now(), "rec_edge": REC_EDGE, "rec_quality": REC_QUALITY,
-                })
+                self._write_locked(
+                    {
+                        "v": 1,
+                        "type": "meta",
+                        "session": sid,
+                        "started": _now(),
+                        "rec_edge": REC_EDGE,
+                        "rec_quality": REC_QUALITY,
+                    }
+                )
                 # Drop the viewer in (overwrite so it always matches this build).
                 try:
                     with open(os.path.join(d, "replay.html"), "w") as rf:
@@ -124,11 +131,17 @@ class Recorder:
 
     def _close_locked(self, reason="stop"):
         try:
-            self._write_locked({
-                "v": 1, "type": "meta", "session": self._session,
-                "ended": _now(), "frames": len(self._hashes),
-                "events": self._seq, "reason": reason,
-            })
+            self._write_locked(
+                {
+                    "v": 1,
+                    "type": "meta",
+                    "session": self._session,
+                    "ended": _now(),
+                    "frames": len(self._hashes),
+                    "events": self._seq,
+                    "reason": reason,
+                }
+            )
         except Exception as e:  # noqa: BLE001
             _warn("close meta failed:", e)
         try:
@@ -149,18 +162,22 @@ class Recorder:
             if self._fh is None:
                 return
             try:
-                self._write_locked({
-                    "seq": self._next_seq_locked(),
-                    "ts": _now(),
-                    "type": "action",
-                    "tool": tool,
-                    "args": _sanitize_args(args),
-                    "resolved_coords": list(resolved) if resolved is not None else None,
-                    "result": (str(result)[:500] if result is not None else None),
-                    "ok": bool(ok),
-                    "ms": int(ms) if ms is not None else None,
-                    "view": _copy_view(view),
-                })
+                self._write_locked(
+                    {
+                        "seq": self._next_seq_locked(),
+                        "ts": _now(),
+                        "type": "action",
+                        "tool": tool,
+                        "args": _sanitize_args(args),
+                        "resolved_coords": list(resolved)
+                        if resolved is not None
+                        else None,
+                        "result": (str(result)[:500] if result is not None else None),
+                        "ok": bool(ok),
+                        "ms": int(ms) if ms is not None else None,
+                        "view": _copy_view(view),
+                    }
+                )
             except Exception as e:  # noqa: BLE001
                 _warn("log_action failed:", e)
 
@@ -178,8 +195,9 @@ class Recorder:
                 le = max(w0, h0)
                 scale = min(1.0, REC_EDGE / le) if le else 1.0
                 if scale < 1.0:
-                    img = img.resize((max(1, round(w0 * scale)),
-                                      max(1, round(h0 * scale))), LANCZOS)
+                    img = img.resize(
+                        (max(1, round(w0 * scale)), max(1, round(h0 * scale))), LANCZOS
+                    )
                 buf = io.BytesIO()
                 img.save(buf, format="WEBP", quality=REC_QUALITY)
                 raw = buf.getvalue()
@@ -194,17 +212,20 @@ class Recorder:
                     self._hashes[sha] = fname
                     ref = fname
 
-                self._write_locked({
-                    "seq": self._next_seq_locked(),
-                    "ts": _now(),
-                    "type": "screenshot",
-                    "tool": tool,
-                    "image_ref": ref,
-                    "sha256": sha,
-                    "w": w, "h": h,
-                    "bytes": len(raw),
-                    "view": _copy_view(view),
-                })
+                self._write_locked(
+                    {
+                        "seq": self._next_seq_locked(),
+                        "ts": _now(),
+                        "type": "screenshot",
+                        "tool": tool,
+                        "image_ref": ref,
+                        "sha256": sha,
+                        "w": w,
+                        "h": h,
+                        "bytes": len(raw),
+                        "view": _copy_view(view),
+                    }
+                )
                 return ref
             except Exception as e:  # noqa: BLE001
                 _warn("log_frame failed:", e)
@@ -261,6 +282,7 @@ def _copy_view(view):
 def _warn(*a):
     try:
         import sys
+
         print("recorder:", *a, file=sys.stderr, flush=True)
     except Exception:  # noqa: BLE001
         pass

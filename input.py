@@ -11,18 +11,21 @@ Coordinate mapping (the important part):
   We therefore divide the in-monitor native offset by that monitor's scale and add the
   monitor's logical origin (lpx/lpy). This replaces the old native-px + relative-motion
   remainder hack entirely — no COORD_MODE, no NotifyPointerMotion fixup."""
+
 import os
 import time
 import shutil
 import subprocess
 import state
-import uinput_backend as ui   # kernel-level absolute-pointer path (preferred when available)
+import uinput_backend as ui  # kernel-level absolute-pointer path (preferred when available)
 
 
 def _use_uinput():
     """Prefer the uinput backend when it's available AND we know the desktop bounds (so the
     ABS range can be mapped 1:1 to native px). The portal path remains the fallback."""
-    return ui.available() and bool(state.SESSION.get("W")) and bool(state.SESSION.get("H"))
+    return (
+        ui.available() and bool(state.SESSION.get("W")) and bool(state.SESSION.get("H"))
+    )
 
 
 def _stamp_input():
@@ -30,6 +33,7 @@ def _stamp_input():
     frame first. App-agnostic: any post-action capture (not just verify=true) waits for the
     UI to stop changing instead of grabbing a pre-change / mid-transition frame."""
     state.SESSION["last_input_t"] = time.monotonic()
+
 
 # gi.repository is imported in a try/except so the pure-math helpers below
 # (resolve_xy, global_to_logical, _keysym, _char_keysym) stay importable on a box
@@ -72,12 +76,17 @@ def guard_user(force=False):
     if cmd is None:
         return
     import capture  # lazy: capture imports state, not input — no cycle
+
     # Pin the read to the SAME node we last commanded, so we compare like-for-like. Without
     # this, cursor_pos() returns the freshest sample across ALL monitors, which on a static
     # target is a DIFFERENT monitor's position — a cross-monitor compare that trips the 40px
     # threshold spuriously and aborts a correctly-positioned action.
     node = state.SESSION.get("cmd_node")
-    live = capture.cursor_pos(prefer_node=node) if node is not None else capture.cursor_pos()
+    live = (
+        capture.cursor_pos(prefer_node=node)
+        if node is not None
+        else capture.cursor_pos()
+    )
     if live is None:
         return
     # Fail OPEN on a cross-monitor reading: if the live sample resolved to a different monitor
@@ -86,12 +95,15 @@ def guard_user(force=False):
     if node is not None:
         geo = {m["node"]: m for m in (state.SESSION.get("geo") or [])}
         m = geo.get(node)
-        if m and not (m["x"] <= live[0] < m["x"] + m["w"] and m["y"] <= live[1] < m["y"] + m["h"]):
+        if m and not (
+            m["x"] <= live[0] < m["x"] + m["w"] and m["y"] <= live[1] < m["y"] + m["h"]
+        ):
             return
     if abs(live[0] - cmd[0]) > GUARD_THRESH or abs(live[1] - cmd[1]) > GUARD_THRESH:
         raise UserControlError(
             f"user moved the mouse to {live}; I last left it at {cmd}. Stopping so I don't "
-            f"fight you for the pointer — re-issue with force=true to take control back.")
+            f"fight you for the pointer — re-issue with force=true to take control back."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -99,24 +111,50 @@ def guard_user(force=False):
 # ---------------------------------------------------------------------------
 def _notify_motion(node, lx, ly):
     state.bus.call_sync(
-        state.PORTAL, state.OBJ, state.RD, "NotifyPointerMotionAbsolute",
-        GLib.Variant("(oa{sv}udd)", (state.SESSION["handle"], {}, int(node), float(lx), float(ly))),
-        None, Gio.DBusCallFlags.NONE, -1, None)
+        state.PORTAL,
+        state.OBJ,
+        state.RD,
+        "NotifyPointerMotionAbsolute",
+        GLib.Variant(
+            "(oa{sv}udd)",
+            (state.SESSION["handle"], {}, int(node), float(lx), float(ly)),
+        ),
+        None,
+        Gio.DBusCallFlags.NONE,
+        -1,
+        None,
+    )
 
 
 def _notify_button(code, btn_state):
     state.bus.call_sync(
-        state.PORTAL, state.OBJ, state.RD, "NotifyPointerButton",
-        GLib.Variant("(oa{sv}iu)", (state.SESSION["handle"], {}, int(code), int(btn_state))),
-        None, Gio.DBusCallFlags.NONE, -1, None)
+        state.PORTAL,
+        state.OBJ,
+        state.RD,
+        "NotifyPointerButton",
+        GLib.Variant(
+            "(oa{sv}iu)", (state.SESSION["handle"], {}, int(code), int(btn_state))
+        ),
+        None,
+        Gio.DBusCallFlags.NONE,
+        -1,
+        None,
+    )
     _stamp_input()
 
 
 def _notify_axis(axis, step):
     state.bus.call_sync(
-        state.PORTAL, state.OBJ, state.RD, "NotifyPointerAxisDiscrete",
+        state.PORTAL,
+        state.OBJ,
+        state.RD,
+        "NotifyPointerAxisDiscrete",
         GLib.Variant("(oa{sv}ui)", (state.SESSION["handle"], {}, int(axis), int(step))),
-        None, Gio.DBusCallFlags.NONE, -1, None)
+        None,
+        Gio.DBusCallFlags.NONE,
+        -1,
+        None,
+    )
     _stamp_input()
 
 
@@ -127,17 +165,35 @@ def _notify_axis_px(dx, dy, finish=False):
     flushes the smooth-scroll sequence so the app applies it (a kinetic-scroll requirement)."""
     opts = {"finish": GLib.Variant("b", True)} if finish else {}
     state.bus.call_sync(
-        state.PORTAL, state.OBJ, state.RD, "NotifyPointerAxis",
-        GLib.Variant("(oa{sv}dd)", (state.SESSION["handle"], opts, float(dx), float(dy))),
-        None, Gio.DBusCallFlags.NONE, -1, None)
+        state.PORTAL,
+        state.OBJ,
+        state.RD,
+        "NotifyPointerAxis",
+        GLib.Variant(
+            "(oa{sv}dd)", (state.SESSION["handle"], opts, float(dx), float(dy))
+        ),
+        None,
+        Gio.DBusCallFlags.NONE,
+        -1,
+        None,
+    )
     _stamp_input()
 
 
 def _notify_keysym(ks, key_state):
     state.bus.call_sync(
-        state.PORTAL, state.OBJ, state.RD, "NotifyKeyboardKeysym",
-        GLib.Variant("(oa{sv}iu)", (state.SESSION["handle"], {}, int(ks), int(key_state))),
-        None, Gio.DBusCallFlags.NONE, -1, None)
+        state.PORTAL,
+        state.OBJ,
+        state.RD,
+        "NotifyKeyboardKeysym",
+        GLib.Variant(
+            "(oa{sv}iu)", (state.SESSION["handle"], {}, int(ks), int(key_state))
+        ),
+        None,
+        Gio.DBusCallFlags.NONE,
+        -1,
+        None,
+    )
     _stamp_input()
 
 
@@ -147,9 +203,18 @@ def _notify_keycode(kc, key_state):
     some apps (the bug that made typing/Ctrl+K no-op). Keycodes go straight through. Mirrors
     what the leading GNOME-Wayland tools (computer-use-linux) settled on."""
     state.bus.call_sync(
-        state.PORTAL, state.OBJ, state.RD, "NotifyKeyboardKeycode",
-        GLib.Variant("(oa{sv}iu)", (state.SESSION["handle"], {}, int(kc), int(key_state))),
-        None, Gio.DBusCallFlags.NONE, -1, None)
+        state.PORTAL,
+        state.OBJ,
+        state.RD,
+        "NotifyKeyboardKeycode",
+        GLib.Variant(
+            "(oa{sv}iu)", (state.SESSION["handle"], {}, int(kc), int(key_state))
+        ),
+        None,
+        Gio.DBusCallFlags.NONE,
+        -1,
+        None,
+    )
     _stamp_input()
 
 
@@ -167,7 +232,10 @@ def global_to_logical(Gx, Gy):
     geo = state.SESSION["geo"]
     m = None
     for cand in geo:
-        if cand["x"] <= Gx < cand["x"] + cand["w"] and cand["y"] <= Gy < cand["y"] + cand["h"]:
+        if (
+            cand["x"] <= Gx < cand["x"] + cand["w"]
+            and cand["y"] <= Gy < cand["y"] + cand["h"]
+        ):
             m = cand
             break
     if m is None:
@@ -200,11 +268,17 @@ def resolve_xy(args):
     # enforced for view/norm space (desktop coords are absolute, transform-independent).
     if space in ("view", "norm"):
         want = args.get("view_id")
-        if want is not None and v and v.get("id") is not None and int(want) != int(v["id"]):
+        if (
+            want is not None
+            and v
+            and v.get("id") is not None
+            and int(want) != int(v["id"])
+        ):
             raise StaleViewError(
                 f"coords reference screenshot view#{want} but the current view is "
                 f"view#{v['id']} (a later screenshot rebound the transform). Re-screenshot "
-                f"and click with the fresh view's coords + view_id.")
+                f"and click with the fresh view's coords + view_id."
+            )
 
     if space == "desktop":
         return int(round(x)), int(round(y))
@@ -217,11 +291,15 @@ def resolve_xy(args):
         rh = v["dh"] * v["scale"]
         vx = (x / 1000.0) * rw
         vy = (y / 1000.0) * rh
-        return int(round(v["ox"] + vx / v["scale"])), int(round(v["oy"] + vy / v["scale"]))
+        return int(round(v["ox"] + vx / v["scale"])), int(
+            round(v["oy"] + vy / v["scale"])
+        )
 
     # space == 'view'
     if v:
-        return int(round(v["ox"] + x / v["scale"])), int(round(v["oy"] + y / v["scale"]))
+        return int(round(v["ox"] + x / v["scale"])), int(
+            round(v["oy"] + y / v["scale"])
+        )
     return int(round(x)), int(round(y))
 
 
@@ -269,7 +347,8 @@ def _ok(text):
 def move(args):
     Gx, Gy = resolve_xy(args)
     if _use_uinput() and ui.move(Gx, Gy):
-        _set_cmd(Gx, Gy); _stamp_input()
+        _set_cmd(Gx, Gy)
+        _stamp_input()
         return _ok(f"moved to desktop ({Gx},{Gy}) [uinput]")
     _goto(Gx, Gy)
     return _ok(f"moved to desktop ({Gx},{Gy})")
@@ -285,24 +364,34 @@ def click(args):
     # button presses there, so it lands exactly regardless of monitor/scaling/static state.
     if _use_uinput():
         gx, gy = (Gx, Gy) if have_xy else (state.SESSION.get("cmd_cursor") or (0, 0))
-        if ui.click(gx, gy, button=button, double=bool(args.get("double")), in_place=not have_xy):
+        if ui.click(
+            gx, gy, button=button, double=bool(args.get("double")), in_place=not have_xy
+        ):
             if have_xy:
                 _set_cmd(Gx, Gy)
             _stamp_input()
-            return _ok(f"clicked {button} {('(' + str(Gx) + ',' + str(Gy) + ')') if have_xy else '(in place)'} [uinput]")
+            return _ok(
+                f"clicked {button} {('(' + str(Gx) + ',' + str(Gy) + ')') if have_xy else '(in place)'} [uinput]"
+            )
     # Fallback: portal path.
     btn = BTN.get(button, 0x110)
     if have_xy:
-        _goto(Gx, Gy); GLib.usleep(30000); where = f"({Gx},{Gy})"
+        _goto(Gx, Gy)
+        GLib.usleep(30000)
+        where = f"({Gx},{Gy})"
     else:
         where = "(in place)"
     for _ in range(2 if args.get("double") else 1):
-        _notify_button(btn, 1); GLib.usleep(20000)
-        _notify_button(btn, 0); GLib.usleep(20000)
+        _notify_button(btn, 1)
+        GLib.usleep(20000)
+        _notify_button(btn, 0)
+        GLib.usleep(20000)
     return _ok(f"clicked {button} {where}")
 
 
-SCROLL_PX = int(os.environ.get("MCP_SCREEN_SCROLL_PX", "120"))   # px per notch (one wheel step)
+SCROLL_PX = int(
+    os.environ.get("MCP_SCREEN_SCROLL_PX", "120")
+)  # px per notch (one wheel step)
 
 
 def scroll(args):
@@ -311,7 +400,8 @@ def scroll(args):
     if "x" in args and "y" in args:
         Gx, Gy = resolve_xy(args)
     elif state.SESSION.get("view"):
-        v = state.SESSION["view"]; Gx, Gy = int(v["ox"] + v["dw"] / 2), int(v["oy"] + v["dh"] / 2)
+        v = state.SESSION["view"]
+        Gx, Gy = int(v["ox"] + v["dw"] / 2), int(v["oy"] + v["dh"] / 2)
     else:
         Gx, Gy = state.SESSION.get("cmd_cursor") or (0, 0)
     direction = args.get("direction", "down")
@@ -324,10 +414,12 @@ def scroll(args):
         dy = sign * amount if not horizontal else 0
         dx = sign * amount if horizontal else 0
         if ui.scroll(Gx, Gy, dy_notches=dy, dx_notches=dx, at=True):
-            _set_cmd(Gx, Gy); _stamp_input()   # ui.scroll repositions the pointer to (Gx,Gy)
+            _set_cmd(Gx, Gy)
+            _stamp_input()  # ui.scroll repositions the pointer to (Gx,Gy)
             return _ok(f"scrolled {direction} x{amount} [uinput hi-res]")
     # Fallback: portal smooth pixel axis.
-    _goto(Gx, Gy); GLib.usleep(20000)
+    _goto(Gx, Gy)
+    GLib.usleep(20000)
     try:
         for i in range(amount):
             ddx, ddy = (sign * SCROLL_PX, 0) if horizontal else (0, sign * SCROLL_PX)
@@ -337,7 +429,8 @@ def scroll(args):
     except Exception:
         axis = 1 if horizontal else 0
         for _ in range(amount):
-            _notify_axis(axis, sign); GLib.usleep(15000)
+            _notify_axis(axis, sign)
+            GLib.usleep(15000)
         return _ok(f"scrolled {direction} x{amount} (discrete)")
 
 
@@ -347,7 +440,8 @@ def drag(args):
     x1, y1 = resolve_xy({"x": args["x1"], "y": args["y1"], "space": sp, "view_id": vid})
     x2, y2 = resolve_xy({"x": args["x2"], "y": args["y2"], "space": sp, "view_id": vid})
     if _use_uinput() and ui.drag(x1, y1, x2, y2, button=args.get("button", "left")):
-        _set_cmd(x2, y2); _stamp_input()
+        _set_cmd(x2, y2)
+        _stamp_input()
         return _ok(f"dragged ({x1},{y1})->({x2},{y2}) [uinput]")
     btn = BTN.get(args.get("button", "left"), 0x110)
     _goto(x1, y1)
@@ -356,7 +450,10 @@ def drag(args):
     GLib.usleep(40000)
     steps = 10
     for i in range(1, steps + 1):
-        _goto(int(round(x1 + (x2 - x1) * i / steps)), int(round(y1 + (y2 - y1) * i / steps)))
+        _goto(
+            int(round(x1 + (x2 - x1) * i / steps)),
+            int(round(y1 + (y2 - y1) * i / steps)),
+        )
         GLib.usleep(15000)
     GLib.usleep(40000)
     _notify_button(btn, 0)
@@ -366,39 +463,170 @@ def drag(args):
 # ---------------------------------------------------------------------------
 # Keyboard
 # ---------------------------------------------------------------------------
-SPECIAL = {"enter": 0xFF0D, "return": 0xFF0D, "tab": 0xFF09, "backspace": 0xFF08,
-           "esc": 0xFF1B, "escape": 0xFF1B, "space": 0x20, "delete": 0xFFFF,
-           "up": 0xFF52, "down": 0xFF54, "left": 0xFF51, "right": 0xFF53,
-           "home": 0xFF50, "end": 0xFF57, "pageup": 0xFF55, "pagedown": 0xFF56}
-MODS = {"ctrl": 0xFFE3, "control": 0xFFE3, "alt": 0xFFE9, "shift": 0xFFE1,
-        "super": 0xFFEB, "meta": 0xFFE7, "cmd": 0xFFEB}
+SPECIAL = {
+    "enter": 0xFF0D,
+    "return": 0xFF0D,
+    "tab": 0xFF09,
+    "backspace": 0xFF08,
+    "esc": 0xFF1B,
+    "escape": 0xFF1B,
+    "space": 0x20,
+    "delete": 0xFFFF,
+    "up": 0xFF52,
+    "down": 0xFF54,
+    "left": 0xFF51,
+    "right": 0xFF53,
+    "home": 0xFF50,
+    "end": 0xFF57,
+    "pageup": 0xFF55,
+    "pagedown": 0xFF56,
+}
+MODS = {
+    "ctrl": 0xFFE3,
+    "control": 0xFFE3,
+    "alt": 0xFFE9,
+    "shift": 0xFFE1,
+    "super": 0xFFEB,
+    "meta": 0xFFE7,
+    "cmd": 0xFFEB,
+}
 
 # --- Linux evdev keycodes (from <linux/input-event-codes.h>) ----------------
 # The portal's NotifyKeyboardKeycode wants raw evdev codes. This is the reliable path on
 # Mutter (the keysym path is layout-reverse-mapped and drops keys). KEY_LEFTSHIFT etc.
 KC_LEFTSHIFT = 42
-_KC_MODS = {"ctrl": 29, "control": 29, "alt": 56, "shift": 42, "super": 125, "meta": 125,
-            "cmd": 125, "rightctrl": 97, "rightalt": 100}
-_KC_SPECIAL = {"enter": 28, "return": 28, "tab": 15, "backspace": 14, "esc": 1, "escape": 1,
-               "space": 57, "delete": 111, "up": 103, "down": 108, "left": 105, "right": 106,
-               "home": 102, "end": 107, "pageup": 104, "pagedown": 109, "insert": 110}
+_KC_MODS = {
+    "ctrl": 29,
+    "control": 29,
+    "alt": 56,
+    "shift": 42,
+    "super": 125,
+    "meta": 125,
+    "cmd": 125,
+    "rightctrl": 97,
+    "rightalt": 100,
+}
+_KC_SPECIAL = {
+    "enter": 28,
+    "return": 28,
+    "tab": 15,
+    "backspace": 14,
+    "esc": 1,
+    "escape": 1,
+    "space": 57,
+    "delete": 111,
+    "up": 103,
+    "down": 108,
+    "left": 105,
+    "right": 106,
+    "home": 102,
+    "end": 107,
+    "pageup": 104,
+    "pagedown": 109,
+    "insert": 110,
+}
 # Unshifted character -> evdev keycode (US QWERTY). Shifted variants resolve via _SHIFTED_TO_BASE.
 _KC_CHAR = {
-    "a": 30, "b": 48, "c": 46, "d": 32, "e": 18, "f": 33, "g": 34, "h": 35, "i": 23, "j": 36,
-    "k": 37, "l": 38, "m": 50, "n": 49, "o": 24, "p": 25, "q": 16, "r": 19, "s": 31, "t": 20,
-    "u": 22, "v": 47, "w": 17, "x": 45, "y": 21, "z": 44,
-    "1": 2, "2": 3, "3": 4, "4": 5, "5": 6, "6": 7, "7": 8, "8": 9, "9": 10, "0": 11,
-    "-": 12, "=": 13, "[": 26, "]": 27, "\\": 43, ";": 39, "'": 40, "`": 41,
-    ",": 51, ".": 52, "/": 53, " ": 57, "\t": 15, "\n": 28,
+    "a": 30,
+    "b": 48,
+    "c": 46,
+    "d": 32,
+    "e": 18,
+    "f": 33,
+    "g": 34,
+    "h": 35,
+    "i": 23,
+    "j": 36,
+    "k": 37,
+    "l": 38,
+    "m": 50,
+    "n": 49,
+    "o": 24,
+    "p": 25,
+    "q": 16,
+    "r": 19,
+    "s": 31,
+    "t": 20,
+    "u": 22,
+    "v": 47,
+    "w": 17,
+    "x": 45,
+    "y": 21,
+    "z": 44,
+    "1": 2,
+    "2": 3,
+    "3": 4,
+    "4": 5,
+    "5": 6,
+    "6": 7,
+    "7": 8,
+    "8": 9,
+    "9": 10,
+    "0": 11,
+    "-": 12,
+    "=": 13,
+    "[": 26,
+    "]": 27,
+    "\\": 43,
+    ";": 39,
+    "'": 40,
+    "`": 41,
+    ",": 51,
+    ".": 52,
+    "/": 53,
+    " ": 57,
+    "\t": 15,
+    "\n": 28,
 }
 # Shifted ASCII char -> (base unshifted char) on US QWERTY.
 _SHIFTED = {
-    "A": "a", "B": "b", "C": "c", "D": "d", "E": "e", "F": "f", "G": "g", "H": "h", "I": "i",
-    "J": "j", "K": "k", "L": "l", "M": "m", "N": "n", "O": "o", "P": "p", "Q": "q", "R": "r",
-    "S": "s", "T": "t", "U": "u", "V": "v", "W": "w", "X": "x", "Y": "y", "Z": "z",
-    "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8", "(": "9",
-    ")": "0", "_": "-", "+": "=", "{": "[", "}": "]", "|": "\\", ":": ";", '"': "'", "~": "`",
-    "<": ",", ">": ".", "?": "/",
+    "A": "a",
+    "B": "b",
+    "C": "c",
+    "D": "d",
+    "E": "e",
+    "F": "f",
+    "G": "g",
+    "H": "h",
+    "I": "i",
+    "J": "j",
+    "K": "k",
+    "L": "l",
+    "M": "m",
+    "N": "n",
+    "O": "o",
+    "P": "p",
+    "Q": "q",
+    "R": "r",
+    "S": "s",
+    "T": "t",
+    "U": "u",
+    "V": "v",
+    "W": "w",
+    "X": "x",
+    "Y": "y",
+    "Z": "z",
+    "!": "1",
+    "@": "2",
+    "#": "3",
+    "$": "4",
+    "%": "5",
+    "^": "6",
+    "&": "7",
+    "*": "8",
+    "(": "9",
+    ")": "0",
+    "_": "-",
+    "+": "=",
+    "{": "[",
+    "}": "]",
+    "|": "\\",
+    ":": ";",
+    '"': "'",
+    "~": "`",
+    "<": ",",
+    ">": ".",
+    "?": "/",
 }
 
 
@@ -424,9 +652,9 @@ def _key_to_keycode(name):
         return kc
     if n.startswith("f") and n[1:].isdigit():
         fn = int(n[1:])
-        if 1 <= fn <= 10:       # F1..F10 = 59..68
+        if 1 <= fn <= 10:  # F1..F10 = 59..68
             return 58 + fn
-        if 11 <= fn <= 12:      # F11=87, F12=88
+        if 11 <= fn <= 12:  # F11=87, F12=88
             return 76 + fn
     return None
 
@@ -439,7 +667,7 @@ def _keysym(name):
         return MODS[n]
     if len(name) == 1:
         return ord(name)
-    if n.startswith("f") and n[1:].isdigit():            # F1..  -> 0xFFBE + n-1
+    if n.startswith("f") and n[1:].isdigit():  # F1..  -> 0xFFBE + n-1
         return 0xFFBE + int(n[1:]) - 1
     raise ValueError(f"unknown key: {name}")
 
@@ -450,7 +678,7 @@ def _char_keysym(ch):
     if ch == "\t":
         return 0xFF09
     o = ord(ch)
-    if o > 0x7F:                                         # X11 unicode keysym convention
+    if o > 0x7F:  # X11 unicode keysym convention
         return 0x01000000 + o
     return o
 
@@ -469,13 +697,15 @@ def key(args):
     # case-lowering hack — Shift is an explicit keycode, not implied by an uppercase keysym.
     codes = [_key_to_keycode(p) for p in parts]
     if all(c is not None for c in codes):
-        if _use_uinput() and ui.key_codes(codes):        # kernel-level — bypasses focus quirks
+        if _use_uinput() and ui.key_codes(
+            codes
+        ):  # kernel-level — bypasses focus quirks
             _stamp_input()
             return _ok(f"pressed {combo} [uinput]")
-        for c in codes:                                  # press in order
+        for c in codes:  # press in order
             _notify_keycode(c, 1)
         GLib.usleep(20000)
-        for c in reversed(codes):                        # release in reverse
+        for c in reversed(codes):  # release in reverse
             _notify_keycode(c, 0)
         return _ok(f"pressed {combo}")
     # Fallback: keysym path (legacy) for any token we couldn't map to a keycode.
@@ -502,7 +732,7 @@ def _clip_paste(text):
     prior clipboard, we actively `--clear` rather than leaving our text behind."""
     if not shutil.which("wl-copy"):
         return False
-    prev = None                                      # best-effort save of the user's clipboard
+    prev = None  # best-effort save of the user's clipboard
     try:
         r = subprocess.run(["wl-paste", "--no-newline"], capture_output=True, timeout=2)
         if r.returncode == 0:
@@ -512,11 +742,11 @@ def _clip_paste(text):
     try:
         subprocess.run(["wl-copy"], input=text.encode("utf-8"), timeout=2, check=True)
     except Exception:
-        return False                                 # we never wrote the clipboard -> nothing to undo
+        return False  # we never wrote the clipboard -> nothing to undo
     try:
         GLib.usleep(40000)
-        key({"keys": "ctrl+v"})                      # paste through the portal
-        GLib.usleep(140000)                          # let the app consume it before we restore
+        key({"keys": "ctrl+v"})  # paste through the portal
+        GLib.usleep(140000)  # let the app consume it before we restore
         return True
     except Exception:
         return False
@@ -536,7 +766,9 @@ def type_text(args):
     # Unicode (any non-ASCII char) goes via clipboard paste — keycodes/keysyms are ASCII-only.
     if any(ord(ch) > 0x7F for ch in text) and _clip_paste(text):
         if args.get("enter"):
-            _notify_keycode(28, 1); GLib.usleep(8000); _notify_keycode(28, 0)
+            _notify_keycode(28, 1)
+            GLib.usleep(8000)
+            _notify_keycode(28, 0)
         return _ok(f"typed {len(text)} chars (unicode via clipboard paste)")
     # Preferred: kernel-level per-char keycodes via uinput (most reliable; bypasses focus
     # quirks). Only when every char maps to a keycode; else fall through to the portal path.
@@ -553,15 +785,20 @@ def type_text(args):
     for ch in text:
         kc, shift = _char_to_keycode(ch)
         if kc is None:
-            _notify_keysym(_char_keysym(ch), 1); GLib.usleep(8000); _notify_keysym(_char_keysym(ch), 0)
-            GLib.usleep(8000); continue
+            _notify_keysym(_char_keysym(ch), 1)
+            GLib.usleep(8000)
+            _notify_keysym(_char_keysym(ch), 0)
+            GLib.usleep(8000)
+            continue
         if shift:
-            _notify_keycode(KC_LEFTSHIFT, 1); GLib.usleep(4000)
+            _notify_keycode(KC_LEFTSHIFT, 1)
+            GLib.usleep(4000)
         _notify_keycode(kc, 1)
         GLib.usleep(8000)
         _notify_keycode(kc, 0)
         if shift:
-            GLib.usleep(4000); _notify_keycode(KC_LEFTSHIFT, 0)
+            GLib.usleep(4000)
+            _notify_keycode(KC_LEFTSHIFT, 0)
         GLib.usleep(8000)
     if args.get("enter"):
         _notify_keycode(28, 1)

@@ -5,6 +5,7 @@ _OCR / _OMNI_SESS first-use in double-checked locks, so 20+ concurrent annotate-
 callers must each see EXACTLY one constructed engine. The fake backends below sleep
 inside __init__ to widen the race window, so an unlocked implementation would build
 the engine multiple times and the test would fail."""
+
 import threading
 import time
 import types
@@ -119,7 +120,8 @@ def fake_backends(monkeypatch):
     _CountingSession.count = 0
     fake_ort = types.SimpleNamespace(
         SessionOptions=lambda: types.SimpleNamespace(
-            intra_op_num_threads=0, inter_op_num_threads=0),
+            intra_op_num_threads=0, inter_op_num_threads=0
+        ),
         InferenceSession=_CountingSession,
     )
     monkeypatch.setattr(grounding, "_HAVE_OCR", True)
@@ -132,7 +134,9 @@ def fake_backends(monkeypatch):
 
 def test_lazy_ocr_init_is_single_under_concurrent_callers(fake_backends):
     bgr = np.zeros((4, 4, 3), dtype=np.uint8)
-    threads = [threading.Thread(target=lambda: grounding.ocr_boxes(bgr)) for _ in range(20)]
+    threads = [
+        threading.Thread(target=lambda: grounding.ocr_boxes(bgr)) for _ in range(20)
+    ]
     for t in threads:
         t.start()
     for t in threads:
@@ -146,7 +150,9 @@ def test_lazy_omni_session_is_single_under_concurrent_callers(fake_backends):
         t.start()
     for t in threads:
         t.join()
-    assert _CountingSession.count == 1, f"race built OmniParser {_CountingSession.count} times"
+    assert _CountingSession.count == 1, (
+        f"race built OmniParser {_CountingSession.count} times"
+    )
 
 
 def test_warmup_initialises_each_backend_at_most_once(fake_backends):
@@ -167,7 +173,9 @@ def test_ocr_and_omni_locks_are_independent(fake_backends):
     started = time.monotonic()
     t1 = threading.Thread(target=lambda: grounding.ocr_boxes(bgr))
     t2 = threading.Thread(target=grounding._omni_session)
-    t1.start(); t2.start()
-    t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
     elapsed = time.monotonic() - started
     assert elapsed < 0.09, f"OCR and OmniParser init serialised (took {elapsed:.3f}s)"

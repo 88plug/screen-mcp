@@ -7,17 +7,22 @@ adds exactly one fresh id() to `used`; they diverge when prev contains the same
 Python object referenced twice (pathological), in which case the direct form is
 correct and the algebraic form drifts. These tests pin both the normal-case contract
 and the pathological bound."""
+
 import sense
 
 
 def _el(role, label, cx, cy, w=20, h=20):
-    return {"role": role, "label": label,
-            "bbox": [cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2]}
+    return {
+        "role": role,
+        "label": label,
+        "bbox": [cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2],
+    }
 
 
 def test_identical_lists_report_no_churn():
-    r = sense.diff_elements([_el("button", "Save", 100, 100)],
-                            [_el("button", "Save", 100, 100)])
+    r = sense.diff_elements(
+        [_el("button", "Save", 100, 100)], [_el("button", "Save", 100, 100)]
+    )
     assert r == {"new": [], "removed": 0, "moved": 0, "changed": []}
 
 
@@ -41,14 +46,16 @@ def test_one_added_is_new_not_removed():
 
 def test_moved_within_radius_is_moved_not_churn():
     # 20px shift; the default move_radius is 40, so this is a same-element move.
-    r = sense.diff_elements([_el("button", "Save", 100, 100)],
-                            [_el("button", "Save", 120, 120)])
+    r = sense.diff_elements(
+        [_el("button", "Save", 100, 100)], [_el("button", "Save", 120, 120)]
+    )
     assert r["moved"] == 1 and r["removed"] == 0 and r["new"] == []
 
 
 def test_moved_beyond_radius_counts_as_new_plus_removed():
-    r = sense.diff_elements([_el("button", "Save", 100, 100)],
-                            [_el("button", "Save", 400, 400)])
+    r = sense.diff_elements(
+        [_el("button", "Save", 100, 100)], [_el("button", "Save", 400, 400)]
+    )
     assert r["moved"] == 0 and r["removed"] == 1 and len(r["new"]) == 1
 
 
@@ -70,9 +77,10 @@ def test_removed_is_always_bounded_by_len_prev_even_for_repeated_id():
     """Regression contract: the patched form derives removed from `used` directly,
     so it cannot exceed len(prev) regardless of how oddly the matcher accounts."""
     shared = _el("button", "Save", 100, 100)
-    r = sense.diff_elements([shared, shared],
-                            [_el("button", "Save", 100, 100),
-                             _el("button", "Save", 100, 100)])
+    r = sense.diff_elements(
+        [shared, shared],
+        [_el("button", "Save", 100, 100), _el("button", "Save", 100, 100)],
+    )
     assert 0 <= r["removed"] <= 2
 
 
@@ -83,13 +91,14 @@ def test_empty_prev():
 
 def test_empty_cur():
     r = sense.diff_elements(
-        [_el("button", "Save", 100, 100), _el("button", "Cancel", 200, 100)], [])
+        [_el("button", "Save", 100, 100), _el("button", "Cancel", 200, 100)], []
+    )
     assert r["removed"] == 2 and r["new"] == []
 
 
 def test_label_less_icon_iou_match_is_not_new():
     prev = [{"role": "icon", "label": "", "bbox": [10, 10, 50, 50]}]
-    cur = [{"role": "icon", "label": "", "bbox": [12, 12, 52, 52]}]   # IoU ~ 0.85
+    cur = [{"role": "icon", "label": "", "bbox": [12, 12, 52, 52]}]  # IoU ~ 0.85
     r = sense.diff_elements(prev, cur)
     assert r["new"] == [] and r["removed"] == 0
 

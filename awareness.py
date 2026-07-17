@@ -9,9 +9,9 @@ respond yet. Every function here is defensive: it NEVER raises and degrades to
 None / [] / "unavailable". As a partial fallback (native GTK/AT-SPI apps only) we
 enumerate window titles via AT-SPI.
 """
+
 import json
 
-import gi
 from gi.repository import Gio, GLib
 
 import state
@@ -26,11 +26,14 @@ def _call(method):
     """Call a no-arg WindowInfo method, return the JSON string, or None on any error."""
     try:
         reply = state.bus.call_sync(
-            DEST, PATH, IFACE, method,
-            None,                       # no args
-            GLib.VariantType("(s)"),    # expected reply type
+            DEST,
+            PATH,
+            IFACE,
+            method,
+            None,  # no args
+            GLib.VariantType("(s)"),  # expected reply type
             Gio.DBusCallFlags.NONE,
-            2000,                       # ms timeout — fail fast if not loaded
+            2000,  # ms timeout — fail fast if not loaded
             None,
         )
         return reply.unpack()[0]
@@ -43,11 +46,15 @@ def _call_arg(method, sig, args, reply="(b)"):
     value or None. Never raises — degrades when the extension isn't loaded yet."""
     try:
         r = state.bus.call_sync(
-            DEST, PATH, IFACE, method,
+            DEST,
+            PATH,
+            IFACE,
+            method,
             GLib.Variant(sig, args),
             GLib.VariantType(reply),
             Gio.DBusCallFlags.NONE,
-            2000, None,
+            2000,
+            None,
         )
         return r.unpack()[0]
     except Exception:
@@ -139,9 +146,12 @@ def monitor_power():
         reply = state.bus.call_sync(
             "org.gnome.Mutter.DisplayConfig",
             "/org/gnome/Mutter/DisplayConfig",
-            "org.gnome.Mutter.DisplayConfig", "GetCurrentState",
+            "org.gnome.Mutter.DisplayConfig",
+            "GetCurrentState",
             None,
-            GLib.VariantType("(ua((ssss)a(siiddada{sv})a{sv})a(iiduba(ssss)a{sv})a{sv})"),
+            GLib.VariantType(
+                "(ua((ssss)a(siiddada{sv})a{sv})a(iiduba(ssss)a{sv})a{sv})"
+            ),
             Gio.DBusCallFlags.NONE,
             2000,
             None,
@@ -158,10 +168,11 @@ def monitor_power():
             (conn, _v, _p, _s) = mon[0]
             cur = None
             for mode in mon[1]:
-                mid, mw, mh = mode[0], mode[1], mode[2]
+                _mid, mw, mh = mode[0], mode[1], mode[2]
                 mprops = mode[6] if len(mode) > 6 else {}
                 if mprops.get("is-current"):
-                    cur = (mw, mh); break
+                    cur = (mw, mh)
+                    break
                 if cur is None:
                     cur = (mw, mh)  # fallback: first mode
             if cur is not None:
@@ -175,9 +186,15 @@ def monitor_power():
                 continue
             sc = scale or 1.0
             # Logical size = native mode size / scale (fractional scaling); round to int px.
-            out.append({"x": int(lx), "y": int(ly),
-                        "w": int(round(px[0] / sc)), "h": int(round(px[1] / sc)),
-                        "on": True})
+            out.append(
+                {
+                    "x": int(lx),
+                    "y": int(ly),
+                    "w": int(round(px[0] / sc)),
+                    "h": int(round(px[1] / sc)),
+                    "on": True,
+                }
+            )
         return out
     except Exception:
         return []
@@ -207,11 +224,16 @@ print(json.dumps(titles))
 def atspi_titles():
     """FALLBACK: window titles via AT-SPI. Isolated in a subprocess so AT-SPI's
     g_error() abort (when the bus is absent) cannot kill the server process."""
-    import subprocess, sys, json
+    import subprocess
+    import sys
+    import json
+
     try:
         r = subprocess.run(
             [sys.executable, "-c", _ATSPI_SCRIPT],
-            capture_output=True, text=True, timeout=4.0,
+            capture_output=True,
+            text=True,
+            timeout=4.0,
         )
         if r.returncode == 0 and r.stdout.strip():
             return json.loads(r.stdout.strip())

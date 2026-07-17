@@ -17,6 +17,7 @@ coords (or a drifted dHash) invalidates the entry so the next visit re-learns.
 Mirrors recorder.py: a MAP singleton, one lock, every method no-op-safe and never raising
 into the caller — a broken world-model must never break the desktop tools. Imports stdlib +
 numpy + Pillow only (no server/capture/input)."""
+
 import os
 import re
 import json
@@ -27,17 +28,20 @@ import numpy as np
 from PIL import Image
 
 DB_PATH = os.path.expanduser("~/.local/share/mcp-screen/world/map.db")
-HAMMING_MAX = int(os.environ.get("MCP_SCREEN_MAP_HAMMING", "5"))    # dHash bits; "same screen" (tight: looser confuses sibling sub-pages)
-CAP = int(os.environ.get("MCP_SCREEN_MAP_CAP", "800"))             # max states before eviction
-MISS_EVICT = 2                                                     # cached-coord misclicks before invalidation
+HAMMING_MAX = int(
+    os.environ.get("MCP_SCREEN_MAP_HAMMING", "5")
+)  # dHash bits; "same screen" (tight: looser confuses sibling sub-pages)
+CAP = int(os.environ.get("MCP_SCREEN_MAP_CAP", "800"))  # max states before eviction
+MISS_EVICT = 2  # cached-coord misclicks before invalidation
 
-_TS = re.compile(r"\b\d{1,2}:\d{2}(:\d{2})?\b")   # clock-ish
+_TS = re.compile(r"\b\d{1,2}:\d{2}(:\d{2})?\b")  # clock-ish
 _NUM = re.compile(r"\d+")
 
 
 def _warn(*a):
     try:
         import sys
+
         print("worldmodel:", *a, file=sys.stderr, flush=True)
     except Exception:
         pass
@@ -74,7 +78,7 @@ def _context(aware_summary):
     try:
         s = aware_summary or ""
         if s.startswith("focused: "):
-            body = s[len("focused: "):]
+            body = s[len("focused: ") :]
             if " — " in body:
                 app, title = body.split(" — ", 1)
             else:
@@ -94,12 +98,15 @@ class WorldModel:
     def __init__(self):
         self._lock = threading.Lock()
         self._db = None
-        self._last_id = None      # state id of the most recent observe/recall (for penalize)
+        self._last_id = (
+            None  # state id of the most recent observe/recall (for penalize)
+        )
 
     def _conn(self):
         if self._db is not None:
             return self._db
         import sqlite3
+
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         db = sqlite3.connect(DB_PATH, check_same_thread=False)
         db.execute("PRAGMA journal_mode=WAL")
@@ -116,8 +123,10 @@ class WorldModel:
         """Best state row in the (app,title) bucket within HAMMING_MAX of dh, or None."""
         best, bestd = None, HAMMING_MAX + 1
         for row in db.execute(
-                "SELECT id,dhash,view_ctx,elements,scroll_max,misses FROM state "
-                "WHERE app=? AND title_norm=?", (app, tnorm)):
+            "SELECT id,dhash,view_ctx,elements,scroll_max,misses FROM state "
+            "WHERE app=? AND title_norm=?",
+            (app, tnorm),
+        ):
             d = _hamming(dh, row[1])
             if d < bestd:
                 best, bestd = row, d
@@ -141,17 +150,25 @@ class WorldModel:
                     sid = row[0]
                     # refresh elements only when we actually have them (a plain shot just touches)
                     if el_json:
-                        db.execute("UPDATE state SET dhash=?,view_ctx=?,elements=?,visits=visits+1,"
-                                   "last_seen=?,misses=0 WHERE id=?", (dh, vc_json, el_json, now, sid))
+                        db.execute(
+                            "UPDATE state SET dhash=?,view_ctx=?,elements=?,visits=visits+1,"
+                            "last_seen=?,misses=0 WHERE id=?",
+                            (dh, vc_json, el_json, now, sid),
+                        )
                     else:
-                        db.execute("UPDATE state SET visits=visits+1,last_seen=? WHERE id=?", (now, sid))
+                        db.execute(
+                            "UPDATE state SET visits=visits+1,last_seen=? WHERE id=?",
+                            (now, sid),
+                        )
                     self._last_id = sid
                 else:
                     if not el_json:
                         return  # never create empty states from plain (non-annotated) shots
                     cur = db.execute(
                         "INSERT INTO state(app,title_norm,dhash,view_ctx,elements,first_seen,last_seen) "
-                        "VALUES(?,?,?,?,?,?,?)", (app, tnorm, dh, vc_json, el_json, now, now))
+                        "VALUES(?,?,?,?,?,?,?)",
+                        (app, tnorm, dh, vc_json, el_json, now, now),
+                    )
                     self._last_id = cur.lastrowid
                     self._evict(db)
                 db.commit()
@@ -175,15 +192,17 @@ class WorldModel:
                     return None
                 app, tnorm = _context(aware_summary)
                 row = self._match(db, app, tnorm, dh)
-                if not row or not row[3]:           # row[3] = elements json
+                if not row or not row[3]:  # row[3] = elements json
                     return None
-                if view_ctx and row[2]:             # geometry must match for coords to be valid
+                if view_ctx and row[2]:  # geometry must match for coords to be valid
                     if json.loads(row[2]) != list(view_ctx):
                         return None
                 self._last_id = row[0]
                 store = {int(k): v for k, v in json.loads(row[3]).items()}
-                db.execute("UPDATE state SET visits=visits+1,last_seen=? WHERE id=?",
-                           (time.time(), row[0]))
+                db.execute(
+                    "UPDATE state SET visits=visits+1,last_seen=? WHERE id=?",
+                    (time.time(), row[0]),
+                )
                 db.commit()
                 return {"elements": store, "state_id": row[0]}
             except Exception as e:
@@ -200,7 +219,10 @@ class WorldModel:
                     return
                 db = self._conn()
                 db.execute("UPDATE state SET misses=misses+1 WHERE id=?", (sid,))
-                db.execute("UPDATE state SET elements=NULL WHERE id=? AND misses>=?", (sid, MISS_EVICT))
+                db.execute(
+                    "UPDATE state SET elements=NULL WHERE id=? AND misses>=?",
+                    (sid, MISS_EVICT),
+                )
                 db.commit()
             except Exception as e:
                 _warn("penalize failed:", e)
@@ -210,8 +232,11 @@ class WorldModel:
             n = db.execute("SELECT COUNT(*) FROM state").fetchone()[0]
             if n <= CAP:
                 return
-            db.execute("DELETE FROM state WHERE id IN (SELECT id FROM state "
-                       "ORDER BY visits ASC, last_seen ASC LIMIT ?)", (n - CAP,))
+            db.execute(
+                "DELETE FROM state WHERE id IN (SELECT id FROM state "
+                "ORDER BY visits ASC, last_seen ASC LIMIT ?)",
+                (n - CAP,),
+            )
         except Exception:
             pass
 
@@ -220,9 +245,16 @@ class WorldModel:
             try:
                 db = self._conn()
                 n = db.execute("SELECT COUNT(*) FROM state").fetchone()[0]
-                cached = db.execute("SELECT COUNT(*) FROM state WHERE elements IS NOT NULL").fetchone()[0]
-                return {"states": n, "with_elements": cached, "db": DB_PATH,
-                        "hamming_max": HAMMING_MAX, "last_state": self._last_id}
+                cached = db.execute(
+                    "SELECT COUNT(*) FROM state WHERE elements IS NOT NULL"
+                ).fetchone()[0]
+                return {
+                    "states": n,
+                    "with_elements": cached,
+                    "db": DB_PATH,
+                    "hamming_max": HAMMING_MAX,
+                    "last_state": self._last_id,
+                }
             except Exception as e:
                 return {"error": str(e)}
 

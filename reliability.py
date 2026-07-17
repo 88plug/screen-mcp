@@ -17,6 +17,7 @@ Imports `state` only (state.SESSION{W,H,view}, state.log). The frame grabber is 
 us at call time as `grab(node) -> (w, h, RGBA ndarray)` — we never import capture, so this
 module stays trivially unit-testable on synthetic numpy arrays. All numpy ops are kept
 cheap (strided downsample, min-length flatten, single boolean reduction)."""
+
 import os
 import re
 import json
@@ -42,11 +43,16 @@ _CLOSE_COMBOS = {"alt+f4", "ctrl+w", "ctrl+q", "cmd+q"}
 # Destructive intent words; matched case-insensitively against OCR text near the target.
 _DESTRUCTIVE = re.compile(
     r"\b(delete|remove|close|quit|submit|pay|purchase|confirm|send|discard|format)\b",
-    re.IGNORECASE)
+    re.IGNORECASE,
+)
 
 # Tools where a no-visible-change result is expected and must NOT raise a misclick warning.
-_NO_NOOP_WARN = {"screen_screenshot", "screen_list_monitors", "screen_move_mouse",
-                 "screen_reload"}
+_NO_NOOP_WARN = {
+    "screen_screenshot",
+    "screen_list_monitors",
+    "screen_move_mouse",
+    "screen_reload",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +125,9 @@ def wait_for_changed_frame(grab_fn, node, baseline_hash, interval=0.06, timeout=
         time.sleep(interval)
 
 
-def wait_for_stable_frame(grab_fn, node, interval=0.10, window=2, timeout=2.5, thresh=0.5):
+def wait_for_stable_frame(
+    grab_fn, node, interval=0.10, window=2, timeout=2.5, thresh=0.5
+):
     """Poll grab_fn(node)[2] until the frame stops changing, capping animation via timeout.
 
     "Stable" = `window` consecutive frame-to-frame mean_abs_diff values all below `thresh`.
@@ -190,8 +198,12 @@ def region_diff(before, after, bbox, thresh=2.0):
     cols = np.any(mask, axis=0)
     ry0, ry1 = np.where(rows)[0][[0, -1]]
     cx0, cx1 = np.where(cols)[0][[0, -1]]
-    changed_bbox = [int(x0 + cx0), int(y0 + ry0),
-                    int(cx1 - cx0 + 1), int(ry1 - ry0 + 1)]
+    changed_bbox = [
+        int(x0 + cx0),
+        int(y0 + ry0),
+        int(cx1 - cx0 + 1),
+        int(ry1 - ry0 + 1),
+    ]
     return True, changed_bbox
 
 
@@ -203,8 +215,18 @@ def log_action(rec):
 
     Schema keys: ts, tool, args, resolved_coords, pre_hash, post_hash, changed,
     changed_bbox, ms, warn. Best-effort: a logging failure must never break the action."""
-    schema = ("ts", "tool", "args", "resolved_coords", "pre_hash", "post_hash",
-              "changed", "changed_bbox", "ms", "warn")
+    schema = (
+        "ts",
+        "tool",
+        "args",
+        "resolved_coords",
+        "pre_hash",
+        "post_hash",
+        "changed",
+        "changed_bbox",
+        "ms",
+        "warn",
+    )
     out = {k: rec.get(k) for k in schema}
     # `setdefault` would no-op here because the dict-comp above pre-populates "ts"
     # to None when the caller didn't pass one — so the key exists but is empty.
@@ -313,8 +335,15 @@ def wrap_call(handler, name, args, ctx):
         H = getattr(ctx, "H", 0) or 0
         if W and H and not (0 <= x < W and 0 <= y < H):
             res = _err(f"ERROR: coords ({x},{y}) outside desktop bounds {W}x{H}")
-            log_action({"tool": name, "args": args, "resolved_coords": [x, y],
-                        "warn": "out-of-bounds", "ms": int((time.time() - t0) * 1000)})
+            log_action(
+                {
+                    "tool": name,
+                    "args": args,
+                    "resolved_coords": [x, y],
+                    "warn": "out-of-bounds",
+                    "ms": int((time.time() - t0) * 1000),
+                }
+            )
             return res
 
     # --- Pick the node we'll watch for change ------------------------------------------
@@ -333,20 +362,34 @@ def wrap_call(handler, name, args, ctx):
     ocr_near = args.get("_ocr_near_target")
     reason = needs_ack(name, args, ocr_near)
     if reason and args.get("ack") != reason:
-        res = _err(f"BLOCKED: this action needs confirmation ({reason}). "
-                   f"Re-issue with ack='{reason}' to proceed.", reason=reason)
-        log_action({"tool": name, "args": args,
-                    "resolved_coords": list(coords) if coords else None,
-                    "warn": f"blocked:{reason}", "ms": int((time.time() - t0) * 1000)})
+        res = _err(
+            f"BLOCKED: this action needs confirmation ({reason}). "
+            f"Re-issue with ack='{reason}' to proceed.",
+            reason=reason,
+        )
+        log_action(
+            {
+                "tool": name,
+                "args": args,
+                "resolved_coords": list(coords) if coords else None,
+                "warn": f"blocked:{reason}",
+                "ms": int((time.time() - t0) * 1000),
+            }
+        )
         return res
 
     # --- Degraded path: no live capture -> just run + log ------------------------------
     if not can_capture:
         result = handler(args)
-        log_action({"tool": name, "args": args,
-                    "resolved_coords": list(coords) if coords else None,
-                    "ms": int((time.time() - t0) * 1000),
-                    "warn": "no-capture"})
+        log_action(
+            {
+                "tool": name,
+                "args": args,
+                "resolved_coords": list(coords) if coords else None,
+                "ms": int((time.time() - t0) * 1000),
+                "warn": "no-capture",
+            }
+        )
         return result
 
     # --- Settle, then capture the pre-frame --------------------------------------------
@@ -383,7 +426,7 @@ def wrap_call(handler, name, args, ctx):
                 ch = frame_hash(after) != pre_hash
         return after, ch, cbox
 
-    result = handler(args)          # issue the action ONCE
+    result = handler(args)  # issue the action ONCE
     after, changed, changed_bbox = _observe()
     warn = None
 
@@ -394,19 +437,20 @@ def wrap_call(handler, name, args, ctx):
         after, changed, changed_bbox = _observe()
         if not changed:
             warn = "no-op"
-            result = _prepend_text(
-                result, "WARN: no screen change — likely misclick")
+            result = _prepend_text(result, "WARN: no screen change — likely misclick")
 
     post_hash = frame_hash(after) if after is not None else None
-    log_action({
-        "tool": name,
-        "args": args,
-        "resolved_coords": list(coords) if coords else None,
-        "pre_hash": pre_hash,
-        "post_hash": post_hash,
-        "changed": bool(changed),
-        "changed_bbox": changed_bbox,
-        "ms": int((time.time() - t0) * 1000),
-        "warn": warn,
-    })
+    log_action(
+        {
+            "tool": name,
+            "args": args,
+            "resolved_coords": list(coords) if coords else None,
+            "pre_hash": pre_hash,
+            "post_hash": post_hash,
+            "changed": bool(changed),
+            "changed_bbox": changed_bbox,
+            "ms": int((time.time() - t0) * 1000),
+            "warn": warn,
+        }
+    )
     return result

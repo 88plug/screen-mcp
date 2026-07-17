@@ -6,6 +6,7 @@ Resolution order:
   2. ``git rev-list --count`` + latest commit date in this repo
   3. ``dev``
 """
+
 import os
 import re
 import subprocess

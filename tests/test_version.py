@@ -1,4 +1,5 @@
 """Tests for version.distribution_version() calver resolution."""
+
 from __future__ import annotations
 
 import re

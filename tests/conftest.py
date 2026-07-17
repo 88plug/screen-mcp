@@ -8,6 +8,7 @@ sys.modules BEFORE any test module triggers the heavy imports.
 Real-environment tests (e.g. test_recorder.py) don't need these stubs — recorder.py
 touches neither gi nor state. Tests that DO want to exercise a particular fake (e.g.
 input._clip_paste interactions) monkey-patch on top of these defaults inside the test."""
+
 import sys
 import types
 

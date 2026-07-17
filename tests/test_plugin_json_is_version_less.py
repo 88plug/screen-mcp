@@ -1,4 +1,5 @@
 """Rolling regime: plugin.json must not pin a version (hub auto-calvers)."""
+
 from __future__ import annotations
 
 import json
