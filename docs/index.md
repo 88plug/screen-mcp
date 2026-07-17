@@ -12,13 +12,16 @@ screen-mcp is an MCP server that lets an agent see and operate your **GNOME/Wayl
 ## Quickstart
 
 ```text
-/plugin marketplace add 88plug/screen-mcp
-/plugin install screen-mcp@screen-mcp
+/plugin marketplace add 88plug/claude-code-plugins
+/plugin install screen-mcp@88plug
 ```
 
-One-time Python deps (system packages are separate — see [Install](install.md)):
+One-time **system** packages (PipeWire + GStreamer + portal) then **Python** deps — full one-liners in [Install](install.md):
 
 ```bash
+# Debian/Ubuntu example (see Install for Arch)
+sudo apt install python3-gi gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+  gstreamer1.0-libav pipewire xdg-desktop-portal-gnome wl-clipboard fonts-dejavu
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 

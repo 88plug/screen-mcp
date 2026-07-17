@@ -22,14 +22,34 @@ Grounding is **CPU-only by design**. The server hard-disables the GPU (`CUDA_VIS
 ## Plugin install (recommended)
 
 ```text
-/plugin marketplace add 88plug/screen-mcp
-/plugin install screen-mcp@screen-mcp
+/plugin marketplace add 88plug/claude-code-plugins
+/plugin install screen-mcp@88plug
 ```
 
-The plugin manifest cannot install system packages or a venv for you. Run the Python deps once in the installed plugin directory (or a clone):
+The plugin manifest cannot install system packages or a venv for you.
+
+### One-time system packages (required)
 
 ```bash
+# Debian / Ubuntu
+sudo apt install python3-gi python3-gi-cairo gir1.2-gstreamer-1.0 \
+  gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+  gstreamer1.0-libav pipewire pipewire-pulse xdg-desktop-portal-gnome \
+  wl-clipboard fonts-dejavu
+
+# Arch / Manjaro
+sudo pacman -S python-gobject gobject-introspection \
+  gstreamer gst-plugins-base gst-plugins-good gst-libav \
+  pipewire pipewire-pulse xdg-desktop-portal-gnome \
+  wl-clipboard ttf-dejavu
+```
+
+### One-time Python deps
+
+```bash
+# In the installed plugin directory (or a clone)
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# minimum only:  .venv/bin/pip install 'numpy>=1.26' 'Pillow>=10.0'
 ```
 
 Or use the helper:

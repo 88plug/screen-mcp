@@ -25,16 +25,32 @@ not just a browser. It is pure Python and runs CPU-only.
 Install the plugin in Claude Code:
 
 ```text
-/plugin marketplace add 88plug/screen-mcp
-/plugin install screen-mcp@screen-mcp
+/plugin marketplace add 88plug/claude-code-plugins
+/plugin install screen-mcp@88plug
 ```
 
-Then run the one-time dependency setup (the server has system and Python deps
-the manifest cannot install for you):
+Then install **system packages** (once per machine) and **Python deps** (plugin
+venv). The marketplace cannot install these for you.
 
 ```bash
-# in the installed plugin dir (or a clone)
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+# --- system (pick your distro) ---
+# Debian / Ubuntu
+sudo apt install python3-gi python3-gi-cairo gir1.2-gstreamer-1.0 \
+  gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+  gstreamer1.0-libav pipewire pipewire-pulse xdg-desktop-portal-gnome \
+  wl-clipboard fonts-dejavu
+
+# Arch / Manjaro
+sudo pacman -S python-gobject gobject-introspection \
+  gstreamer gst-plugins-base gst-plugins-good gst-libav \
+  pipewire pipewire-pulse xdg-desktop-portal-gnome \
+  wl-clipboard ttf-dejavu
+
+# --- Python (required: numpy + Pillow; optional OCR later) ---
+# From the installed plugin root (or a clone):
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+# minimum only:  .venv/bin/pip install 'numpy>=1.26' 'Pillow>=10.0'
 ```
 
 On first use the desktop portal pops a consent dialog asking which monitor(s) to
