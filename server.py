@@ -50,16 +50,32 @@ OPS NOTES (hard-won; read before changing capture/input/cursor code):
       autoloop.py   scroll_to_reveal (screen_read_page): one call reads a whole scrollable view,
                     guard re-checked each iteration. Deterministic reflexes live here, NOT an LLM.
 """
-import sys, os, json, time
+
+import sys
+import os
+import json
+import time
+
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # hard no-GPU: grounding is CPU-only
-import state, capture, input as inp, grounding, awareness, reliability, recorder, sense, worldmodel, autoloop
+import state
+import capture
+import input as inp
+import grounding
+import awareness
+import reliability
+import recorder
+import sense
+import worldmodel
+import autoloop
 from version import __version__
 
 REC = recorder.REC
 MAX_WAIT_MS = int(os.environ.get("MCP_SCREEN_MAX_WAIT_MS", "30000"))
 
+
 def _txt(s):
     return {"type": "text", "text": s}
+
 
 def _sense_block(raw_img, elements_list, post_action=False):
     """Ambient self-learning: diff this frame against the last one the agent saw and append
@@ -78,18 +94,33 @@ def _sense_block(raw_img, elements_list, post_action=False):
     parts = []
     ch = sig.get("change") if sig else None
     if ch and ch.get("new_count"):
-        labels = [repr(e.get("label") or e.get("role")) for e in ch.get("new", []) if (e.get("label") or e.get("role"))][:3]
-        parts.append(f"{ch['new_count']} new element(s)" + (": " + ", ".join(labels) if labels else "")
-                     + (f"; {ch['removed']} removed" if ch.get("removed") else ""))
+        labels = [
+            repr(e.get("label") or e.get("role"))
+            for e in ch.get("new", [])
+            if (e.get("label") or e.get("role"))
+        ][:3]
+        parts.append(
+            f"{ch['new_count']} new element(s)"
+            + (": " + ", ".join(labels) if labels else "")
+            + (f"; {ch['removed']} removed" if ch.get("removed") else "")
+        )
     ov = sig.get("overlay") if sig else None
     if ov and ov.get("present"):
-        parts.append(f"a {ov['kind']} opened (region {ov.get('region')}) — deal with it first")
+        parts.append(
+            f"a {ov['kind']} opened (region {ov.get('region')}) — deal with it first"
+        )
     st = sig.get("settle") if sig else None
     if post_action and st and st.get("activity") == "none":
         parts.append("nothing changed — last action may have been a no-op/misclick")
     if not parts:
         return None
-    return _txt("SENSE " + json.dumps(sig, separators=(",", ":")) + "\nhints: " + "; ".join(parts))
+    return _txt(
+        "SENSE "
+        + json.dumps(sig, separators=(",", ":"))
+        + "\nhints: "
+        + "; ".join(parts)
+    )
+
 
 def _maybe_shot(args, content, _t0):
     """Append a post-action screenshot if shot=true (defaults to re-showing last view area)."""
@@ -98,20 +129,28 @@ def _maybe_shot(args, content, _t0):
     settle = min(MAX_WAIT_MS, float(args.get("settle", 350))) / 1000.0
     if settle > 0:
         time.sleep(settle)
-    region = args.get("region"); monitor = args.get("monitor")
+    region = args.get("region")
+    monitor = args.get("monitor")
     if region is None and monitor is None and state.SESSION.get("view"):
-        v = state.SESSION["view"]; region = [v["ox"], v["oy"], v["dw"], v["dh"]]
+        v = state.SESSION["view"]
+        region = [v["ox"], v["oy"], v["dw"], v["dh"]]
     ts = time.time()
     # Default to a plain (cheap, non-disruptive) grab: an action that changed the screen already
     # generated the damage that produces a current frame, so we rarely need to force one — and
     # forcing nudges the pointer (visible flashing). Opt in with fresh=true only when you suspect
     # the result shot is stale on a static monitor.
-    fresh = bool(args.get("fresh", False)) and args.get("settle") != 0 \
+    fresh = (
+        bool(args.get("fresh", False))
+        and args.get("settle") != 0
         and os.environ.get("MCP_SCREEN_NO_FRESH") != "1"
+    )
     img, ox, oy = capture.capture_desktop(region, monitor, fresh=fresh)
-    raw = img  # un-marked frame for ambient SENSE diffing (shows what the action changed)
+    raw = (
+        img  # un-marked frame for ambient SENSE diffing (shows what the action changed)
+    )
     try:
-        capture.cursor_pos(); img = capture.draw_cursor(img, ox, oy)
+        capture.cursor_pos()
+        img = capture.draw_cursor(img, ox, oy)
     except Exception:
         pass
     shot = capture.encode_store(img, ox, oy, "after", ts)
@@ -121,6 +160,7 @@ def _maybe_shot(args, content, _t0):
     if REC.active():
         REC.log_frame(img, "after", state.SESSION.get("view"))
     return content + shot
+
 
 def _verify(args, fn):
     """Optional post-action verify: warn if a click/type produced no on-screen change."""
@@ -145,8 +185,15 @@ def _verify(args, fn):
             bb = [max(0, lx - 80), max(0, ly - 80), 160, 160]
             changed, _ = reliability.region_diff(before, after, bb)
             if not changed:
-                res["content"].insert(0, _txt("WARN: no screen change near the click — likely a misclick or focus didn't transfer."))
-                if args.get("element") is not None:   # a cached coord missed -> self-heal THAT state's row
+                res["content"].insert(
+                    0,
+                    _txt(
+                        "WARN: no screen change near the click — likely a misclick or focus didn't transfer."
+                    ),
+                )
+                if (
+                    args.get("element") is not None
+                ):  # a cached coord missed -> self-heal THAT state's row
                     try:
                         worldmodel.MAP.penalize(state.SESSION.get("elements_state_id"))
                     except Exception:
@@ -155,21 +202,26 @@ def _verify(args, fn):
         pass
     return res
 
+
 # ---- tools ----
 def tool_screenshot(args):
     t0 = time.time()
     if args.get("regeo"):
         capture.ensure_geo(force=True)
-    region = args.get("region"); monitor = args.get("monitor")
+    region = args.get("region")
+    monitor = args.get("monitor")
     # App-agnostic anti-stale: if input was injected very recently, the UI may still be
     # repainting. Settle the watched monitor before grabbing so we never return a pre-change
     # or mid-transition frame (the root cause of misread "nothing happened" loops). Skippable
     # via settle=0 or MCP_SCREEN_NO_AUTOSETTLE=1; bounded by _settle's own timeout.
     li = state.SESSION.get("last_input_t")
-    recent_input = (li is not None and (time.monotonic() - li) < 1.5)
-    changed = False   # did the post-action change-gate actually SEE the screen change?
-    if (recent_input and args.get("settle") != 0
-            and os.environ.get("MCP_SCREEN_NO_AUTOSETTLE") != "1"):
+    recent_input = li is not None and (time.monotonic() - li) < 1.5
+    changed = False  # did the post-action change-gate actually SEE the screen change?
+    if (
+        recent_input
+        and args.get("settle") != 0
+        and os.environ.get("MCP_SCREEN_NO_AUTOSETTLE") != "1"
+    ):
         try:
             node = _watch_node(args)
             base = state.SESSION.get("last_input_hash")
@@ -178,12 +230,18 @@ def tool_screenshot(args):
             # stale capture on a static monitor — a successful scroll/click is now SEEN), then
             # settle to a steady end state. If no baseline, fall back to stable-settle alone.
             if base is not None and base_node == node:
-                changed, _ = reliability.wait_for_changed_frame(lambda n: capture.grab(n), node, base,
-                                                                timeout=min(MAX_WAIT_MS / 1000.0, 2.5))
+                changed, _ = reliability.wait_for_changed_frame(
+                    lambda n: capture.grab(n),
+                    node,
+                    base,
+                    timeout=min(MAX_WAIT_MS / 1000.0, 2.5),
+                )
             _settle(node, timeout=min(MAX_WAIT_MS / 1000.0, 2.0))
         except Exception:
             pass
-        state.SESSION["last_input_t"] = None   # consume: don't re-settle on the next shot
+        state.SESSION["last_input_t"] = (
+            None  # consume: don't re-settle on the next shot
+        )
         state.SESSION["last_input_hash"] = None
     # Anti-stale freshness, used SPARINGLY: forcing a fresh frame nudges the pointer to generate
     # a damage event (visible cursor movement / a recompose), so doing it on every screenshot
@@ -194,10 +252,14 @@ def tool_screenshot(args):
     # is identical to "now" anyway. Explicit fresh=true forces it; settle=0 / MCP_SCREEN_NO_FRESH=1
     # opt out.
     fresh = args.get("fresh", recent_input and not changed)
-    fresh = bool(fresh) and args.get("settle") != 0 and os.environ.get("MCP_SCREEN_NO_FRESH") != "1"
+    fresh = (
+        bool(fresh)
+        and args.get("settle") != 0
+        and os.environ.get("MCP_SCREEN_NO_FRESH") != "1"
+    )
     try:
         img, ox, oy = capture.capture_desktop(region, monitor, fresh=fresh)
-    except Exception as ex:
+    except Exception:
         hint = capture.asleep_hint(monitor)
         if hint:
             return {"content": [_txt(hint)], "isError": True}
@@ -209,22 +271,38 @@ def tool_screenshot(args):
         aware = awareness.summary()
     except Exception:
         pass
-    view_ctx = [ox, oy, raw.width, raw.height]   # geometry key for the world-model
-    label = (f"Monitor {monitor}" if monitor is not None
-             else "Region" if region else f"Full desktop ({len(capture.ensure_geo())} mon)")
+    view_ctx = [ox, oy, raw.width, raw.height]  # geometry key for the world-model
+    label = (
+        f"Monitor {monitor}"
+        if monitor is not None
+        else "Region"
+        if region
+        else f"Full desktop ({len(capture.ensure_geo())} mon)"
+    )
     extra = []
     if args.get("annotate"):
-        hit = worldmodel.MAP.recall(raw, aware, view_ctx) if args.get("use_cache") else None
-        if hit:                                  # known screen — reuse cached elements, skip OCR
+        hit = (
+            worldmodel.MAP.recall(raw, aware, view_ctx)
+            if args.get("use_cache")
+            else None
+        )
+        if hit:  # known screen — reuse cached elements, skip OCR
             store = hit["elements"]
             state.SESSION["elements"] = store
-            state.SESSION["elements_state_id"] = hit.get("state_id")  # so a misclick self-heals THIS row
+            state.SESSION["elements_state_id"] = hit.get(
+                "state_id"
+            )  # so a misclick self-heals THIS row
             for eid in sorted(store):
                 e = store[eid]
-                extra.append(f"[{eid}] {e.get('role')} {e.get('label')!r} @ desktop({e['x']},{e['y']})")
-            extra.append(f"(world-model cache hit — skipped OCR, {len(store)} elements)")
+                extra.append(
+                    f"[{eid}] {e.get('role')} {e.get('label')!r} @ desktop({e['x']},{e['y']})"
+                )
+            extra.append(
+                f"(world-model cache hit — skipped OCR, {len(store)} elements)"
+            )
             try:
-                capture.cursor_pos(); img = capture.draw_cursor(img, ox, oy)
+                capture.cursor_pos()
+                img = capture.draw_cursor(img, ox, oy)
             except Exception:
                 pass
         else:
@@ -236,24 +314,40 @@ def tool_screenshot(args):
                 for e in elements:
                     x1, y1, x2, y2 = e["bbox"]
                     cx, cy = ox + (x1 + x2) // 2, oy + (y1 + y2) // 2
-                    store[e["id"]] = {"x": cx, "y": cy, "label": e["label"], "role": e["role"]}
-                    extra.append(f"[{e['id']}] {e['role']} {e['label']!r} @ desktop({cx},{cy})")
-                state.SESSION["elements"] = store  # enables click-by-element-id (no coordinate guessing)
-                state.SESSION["elements_state_id"] = worldmodel.MAP.observe(raw, store, aware, view_ctx)  # learn + remember which row
+                    store[e["id"]] = {
+                        "x": cx,
+                        "y": cy,
+                        "label": e["label"],
+                        "role": e["role"],
+                    }
+                    extra.append(
+                        f"[{e['id']}] {e['role']} {e['label']!r} @ desktop({cx},{cy})"
+                    )
+                state.SESSION["elements"] = (
+                    store  # enables click-by-element-id (no coordinate guessing)
+                )
+                state.SESSION["elements_state_id"] = worldmodel.MAP.observe(
+                    raw, store, aware, view_ctx
+                )  # learn + remember which row
             except Exception as ex:
                 extra.append(f"(annotate failed: {ex})")
     else:
-        try:                                   # cursor isn't baked into frames anymore — composite it
-            capture.cursor_pos(); img = capture.draw_cursor(img, ox, oy)
+        try:  # cursor isn't baked into frames anymore — composite it
+            capture.cursor_pos()
+            img = capture.draw_cursor(img, ox, oy)
         except Exception:
             pass
     content = capture.encode_store(img, ox, oy, label, t0)
     content.insert(0, _txt("awareness: " + aware))
-    asleep = capture.asleep_hint(monitor)   # explain any black/sleeping monitor in this frame
+    asleep = capture.asleep_hint(
+        monitor
+    )  # explain any black/sleeping monitor in this frame
     if asleep:
         content.append(_txt(asleep))
     if extra:
-        content.append(_txt("elements (click the desktop() coords):\n" + "\n".join(extra)))
+        content.append(
+            _txt("elements (click the desktop() coords):\n" + "\n".join(extra))
+        )
     sblock = _sense_block(raw, sense_elements)
     if sblock:
         content.append(sblock)
@@ -261,43 +355,67 @@ def tool_screenshot(args):
         REC.log_frame(img, "screenshot", state.SESSION.get("view"))
     return {"content": content}
 
+
 def tool_diag(args):
     """Live health dump: session/geo, the cursor probe cache + guard state, grounding
     backends, and prereqs matrix. Permanent ops tool — first thing to check when
     capture/clicks/cursor act up."""
     import prereqs
+
     d = {
         "version": __version__,
         "prereqs": prereqs.check_all(),
-        "session": {"started": bool(state.SESSION.get("handle")),
-                    "streams": len(state.SESSION.get("streams") or []),
-                    "geo": state.SESSION.get("geo"),
-                    "bounds": [state.SESSION.get("W"), state.SESSION.get("H")],
-                    "view": state.SESSION.get("view"),
-                    "elements_cached": len(state.SESSION.get("elements") or {})},
+        "session": {
+            "started": bool(state.SESSION.get("handle")),
+            "streams": len(state.SESSION.get("streams") or []),
+            "geo": state.SESSION.get("geo"),
+            "bounds": [state.SESSION.get("W"), state.SESSION.get("H")],
+            "view": state.SESSION.get("view"),
+            "elements_cached": len(state.SESSION.get("elements") or {}),
+        },
         "cursor": capture.diag(),
-        "guard": {"cmd_cursor": state.SESSION.get("cmd_cursor"), "threshold_px": inp.GUARD_THRESH},
+        "guard": {
+            "cmd_cursor": state.SESSION.get("cmd_cursor"),
+            "threshold_px": inp.GUARD_THRESH,
+        },
         "uinput": inp.ui.diag(),
         "grounding": grounding.diag(),
         "world_model": worldmodel.MAP.stats(),
     }
     return {"content": [_txt(json.dumps(d, default=str, indent=2))]}
 
+
 def tool_list_monitors(args):
     geo = capture.ensure_geo(force=bool(args.get("regeo")))
-    lines = [f"{i}: origin=({m['x']},{m['y']}) size={m['w']}x{m['h']} scale={m['sx']:g}"
-             for i, m in enumerate(geo)]
+    lines = [
+        f"{i}: origin=({m['x']},{m['y']}) size={m['w']}x{m['h']} scale={m['sx']:g}"
+        for i, m in enumerate(geo)
+    ]
     lines.append(f"desktop bounds: {state.SESSION['W']}x{state.SESSION['H']}")
     try:
         wins = awareness.list_windows()
         if wins:
-            lines.append("windows: " + ", ".join(f"{w.get('app') or w.get('wm_class')}:{w.get('title','')[:30]}" for w in wins[:12]))
+            lines.append(
+                "windows: "
+                + ", ".join(
+                    f"{w.get('app') or w.get('wm_class')}:{w.get('title', '')[:30]}"
+                    for w in wins[:12]
+                )
+            )
     except Exception:
         pass
     return {"content": [_txt("\n".join(lines))]}
 
-_ACTIONS = {"move": inp.move, "click": inp.click, "scroll": inp.scroll,
-            "drag": inp.drag, "key": inp.key, "type": inp.type_text}
+
+_ACTIONS = {
+    "move": inp.move,
+    "click": inp.click,
+    "scroll": inp.scroll,
+    "drag": inp.drag,
+    "key": inp.key,
+    "type": inp.type_text,
+}
+
 
 def _resolve_element(args):
     """If args has `element` (id from the last annotate=true shot), resolve it to exact
@@ -307,8 +425,11 @@ def _resolve_element(args):
         return args
     el = (state.SESSION.get("elements") or {}).get(int(eid))
     if not el:
-        raise RuntimeError(f"element {eid} not found; take a screenshot(annotate=true) first")
+        raise RuntimeError(
+            f"element {eid} not found; take a screenshot(annotate=true) first"
+        )
     return {**args, "x": el["x"], "y": el["y"], "space": "desktop"}
+
 
 def _redact_args(name, args):
     """Strip sensitive fields before audit-logging. The actions.jsonl lands on disk at
@@ -340,7 +461,9 @@ def _click_bbox(node, args):
         return None
     try:
         x, y = inp.resolve_xy(args)
-        m = next((g for g in (state.SESSION.get("geo") or []) if g["node"] == node), None)
+        m = next(
+            (g for g in (state.SESSION.get("geo") or []) if g["node"] == node), None
+        )
         if not m:
             return None
         lx, ly = x - m["x"], y - m["y"]
@@ -356,7 +479,9 @@ def _do_focus(spec):
     extension isn't installed yet. Returns (ok: bool, detail: str). Never raises."""
     if isinstance(spec, dict):
         wid, app, title = spec.get("id"), spec.get("app"), spec.get("title")
-    elif isinstance(spec, (int, float)) or (isinstance(spec, str) and str(spec).isdigit()):
+    elif isinstance(spec, (int, float)) or (
+        isinstance(spec, str) and str(spec).isdigit()
+    ):
         wid, app, title = spec, None, None
     else:
         wid, app, title = None, (spec or None), None
@@ -374,7 +499,9 @@ def _do_focus(spec):
             if w:
                 wid = w.get("id")
         if wid is not None and awareness.activate_window(wid):
-            time.sleep(float(os.environ.get("MCP_SCREEN_FOCUS_SETTLE_MS", "150")) / 1000.0)
+            time.sleep(
+                float(os.environ.get("MCP_SCREEN_FOCUS_SETTLE_MS", "150")) / 1000.0
+            )
             return True, f"focused window id={wid} via extension"
     except Exception:
         pass
@@ -394,14 +521,14 @@ def tool_focus(args):
 
 def _action(name, fn, args):
     """Reliability-wrapped action dispatch:
-      1. Resolve element-id -> coords.
-      2. User-takeover guard.
-      3. Populate _focused_app from awareness so the MCP_SCREEN_APPS allowlist works.
-      4. Ack gate (opt-in via MCP_SCREEN_GUARD=1) — blocks close-combos / destructive
-         keyword matches / out-of-allowlist actions unless `ack=<reason>` is passed.
-      5. Run the handler (with optional verify post-check).
-      6. Append a redacted record to the actions.jsonl audit log.
-      7. Optional auto-screenshot."""
+    1. Resolve element-id -> coords.
+    2. User-takeover guard.
+    3. Populate _focused_app from awareness so the MCP_SCREEN_APPS allowlist works.
+    4. Ack gate (opt-in via MCP_SCREEN_GUARD=1) — blocks close-combos / destructive
+       keyword matches / out-of-allowlist actions unless `ack=<reason>` is passed.
+    5. Run the handler (with optional verify post-check).
+    6. Append a redacted record to the actions.jsonl audit log.
+    7. Optional auto-screenshot."""
     t0 = time.time()
     args = _resolve_element(args)
     # Stale-view pre-check: if the caller bound coords to a superseded screenshot, reject up front
@@ -410,7 +537,12 @@ def _action(name, fn, args):
     if {"x", "y"} <= set(args):
         _pre = args
     elif {"x1", "y1"} <= set(args):
-        _pre = {"x": args["x1"], "y": args["y1"], "space": args.get("space", "view"), "view_id": args.get("view_id")}
+        _pre = {
+            "x": args["x1"],
+            "y": args["y1"],
+            "space": args.get("space", "view"),
+            "view_id": args.get("view_id"),
+        }
     if _pre is not None:
         try:
             inp.resolve_xy(_pre)
@@ -419,7 +551,7 @@ def _action(name, fn, args):
         except Exception:
             pass
     try:
-        inp.guard_user(args.get("force"))
+        inp.guard_user(bool(args.get("force")))
     except inp.UserControlError as e:
         return {"content": [_txt(f"STOPPED: {e}")], "isError": True}
     # Optional pre-action focus: keyboard events go to the COMPOSITOR-focused window, which a
@@ -441,13 +573,25 @@ def _action(name, fn, args):
             pass
     reason = reliability.needs_ack(name, args, args.get("_ocr_near_target"))
     if reason and args.get("ack") != reason:
-        res = {"content": [_txt(f"BLOCKED: this action needs confirmation ({reason}). "
-                                f"Re-issue with ack='{reason}' to proceed.")],
-               "isError": True, "ack_reason": reason}
+        res = {
+            "content": [
+                _txt(
+                    f"BLOCKED: this action needs confirmation ({reason}). "
+                    f"Re-issue with ack='{reason}' to proceed."
+                )
+            ],
+            "isError": True,
+            "ack_reason": reason,
+        }
         try:
-            reliability.log_action({"tool": name, "args": _redact_args(name, args),
-                                    "warn": f"blocked:{reason}",
-                                    "ms": int((time.time() - t0) * 1000)})
+            reliability.log_action(
+                {
+                    "tool": name,
+                    "args": _redact_args(name, args),
+                    "warn": f"blocked:{reason}",
+                    "ms": int((time.time() - t0) * 1000),
+                }
+            )
         except Exception:
             pass
         return res
@@ -495,17 +639,25 @@ def _action(name, fn, args):
                 coords = list(inp.resolve_xy(args))
             except Exception:
                 coords = None
-        reliability.log_action({
-            "tool": name, "args": _redact_args(name, args),
-            "resolved_coords": coords,
-            "pre_hash": pre_hash, "post_hash": post_hash,
-            "changed": changed, "changed_bbox": changed_bbox,
-            "ms": int((time.time() - t0) * 1000),
-            "warn": "error" if (isinstance(res, dict) and res.get("isError")) else None,
-        })
+        reliability.log_action(
+            {
+                "tool": name,
+                "args": _redact_args(name, args),
+                "resolved_coords": coords,
+                "pre_hash": pre_hash,
+                "post_hash": post_hash,
+                "changed": changed,
+                "changed_bbox": changed_bbox,
+                "ms": int((time.time() - t0) * 1000),
+                "warn": "error"
+                if (isinstance(res, dict) and res.get("isError"))
+                else None,
+            }
+        )
     except Exception:
         pass
     return {"content": _maybe_shot(args, res["content"], t0)}
+
 
 def _watch_node(args):
     """Pick the monitor node to watch for change: the region/view center's monitor, else
@@ -515,7 +667,8 @@ def _watch_node(args):
     if region:
         cx, cy = region[0] + region[2] / 2.0, region[1] + region[3] / 2.0
     elif state.SESSION.get("view"):
-        v = state.SESSION["view"]; cx, cy = v["ox"] + v["dw"] / 2.0, v["oy"] + v["dh"] / 2.0
+        v = state.SESSION["view"]
+        cx, cy = v["ox"] + v["dw"] / 2.0, v["oy"] + v["dh"] / 2.0
     else:
         return geo[0]["node"]
     for m in geo:
@@ -529,7 +682,12 @@ def _settle(node, timeout=5.0, window=2, thresh=0.5):
     Returns (stable, last_diff, ms)."""
     t0 = time.time()
     stable, last = reliability.wait_for_stable_frame(
-        lambda n: capture.grab(n), node, timeout=timeout, window=int(window), thresh=float(thresh))
+        lambda n: capture.grab(n),
+        node,
+        timeout=timeout,
+        window=int(window),
+        thresh=float(thresh),
+    )
     return stable, last, int((time.time() - t0) * 1000)
 
 
@@ -540,10 +698,21 @@ def tool_wait(args):
     try:
         node = _watch_node(args)
     except Exception:
-        return {"content": [_txt("wait: no session/geo yet — take a screenshot first")], "isError": True}
-    stable, last, ms = _settle(node, timeout=min(MAX_WAIT_MS / 1000.0, float(args.get("timeout", 5.0))),
-                               window=args.get("window", 2), thresh=args.get("thresh", 0.5))
-    msg = f"settled in {ms}ms" if stable else f"still changing after {ms}ms (timeout; last_diff {last:.2f})"
+        return {
+            "content": [_txt("wait: no session/geo yet — take a screenshot first")],
+            "isError": True,
+        }
+    stable, last, ms = _settle(
+        node,
+        timeout=min(MAX_WAIT_MS / 1000.0, float(args.get("timeout", 5.0))),
+        window=args.get("window", 2),
+        thresh=args.get("thresh", 0.5),
+    )
+    msg = (
+        f"settled in {ms}ms"
+        if stable
+        else f"still changing after {ms}ms (timeout; last_diff {last:.2f})"
+    )
     return {"content": _maybe_shot(args, [_txt("wait: " + msg)], time.time())}
 
 
@@ -559,23 +728,30 @@ def tool_tour(args):
     default_settle = float(args.get("settle", 400))
     force = args.get("force")
     max_edge = int(args.get("shot_max_edge", 1280))
-    capture.ensure_geo()   # self-initialize so the first step's click has geo (no warm-up shot needed)
+    capture.ensure_geo()  # self-initialize so the first step's click has geo (no warm-up shot needed)
     content, errs, t_all = [], [], time.time()
     for si, stop in enumerate(stops):
         label = stop.get("label", f"stop{si}")
         for step in (dict(s) for s in stop.get("steps", [])):
             action = step.pop("action", None)
             if action == "wait":
-                time.sleep(min(MAX_WAIT_MS, float(step.get("ms", 300))) / 1000.0); continue
+                time.sleep(min(MAX_WAIT_MS, float(step.get("ms", 300))) / 1000.0)
+                continue
             if action == "wait_stable":
                 try:
-                    _settle(_watch_node(step), timeout=min(MAX_WAIT_MS / 1000.0, float(step.get("timeout", 5.0))))
+                    _settle(
+                        _watch_node(step),
+                        timeout=min(
+                            MAX_WAIT_MS / 1000.0, float(step.get("timeout", 5.0))
+                        ),
+                    )
                 except Exception:
                     pass
                 continue
             fn = _ACTIONS.get(action)
             if not fn:
-                errs.append(f"{label}: unknown action {action!r}"); continue
+                errs.append(f"{label}: unknown action {action!r}")
+                continue
             try:
                 step = _resolve_element(step)
                 inp.guard_user(step.get("force", force))
@@ -590,22 +766,27 @@ def tool_tour(args):
             time.sleep(settle)
         region, monitor = stop.get("region"), stop.get("monitor")
         if region is None and monitor is None and state.SESSION.get("view"):
-            v = state.SESSION["view"]; region = [v["ox"], v["oy"], v["dw"], v["dh"]]
+            v = state.SESSION["view"]
+            region = [v["ox"], v["oy"], v["dw"], v["dh"]]
         t0 = time.time()
         img, ox, oy = capture.capture_desktop(region, monitor)
         try:
-            capture.cursor_pos(); img = capture.draw_cursor(img, ox, oy)
+            capture.cursor_pos()
+            img = capture.draw_cursor(img, ox, oy)
         except Exception:
             pass
         content += capture.encode_store(img, ox, oy, label, t0, max_edge=max_edge)
         if REC.active():
             REC.log_frame(img, f"tour:{label}", state.SESSION.get("view"))
-    head = (f"TOUR ({len(stops)} stops, {int((time.time() - t_all) * 1000)}ms total): "
-            + " -> ".join(s.get("label", f"stop{i}") for i, s in enumerate(stops)))
+    head = (
+        f"TOUR ({len(stops)} stops, {int((time.time() - t_all) * 1000)}ms total): "
+        + " -> ".join(s.get("label", f"stop{i}") for i, s in enumerate(stops))
+    )
     if errs:
         head += "  | errors: " + "; ".join(errs)
     content.insert(0, _txt(head))
     return {"content": content}
+
 
 def tool_do(args):
     """Batched ordered actions: steps=[{action, ...args}]. One optional final screenshot."""
@@ -617,11 +798,18 @@ def tool_do(args):
         action = step.pop("action", None)
         fn = _ACTIONS.get(action)
         if action == "wait":
-            time.sleep(min(MAX_WAIT_MS, float(step.get("ms", 300))) / 1000.0); out.append(f"[{i}] wait"); continue
+            time.sleep(min(MAX_WAIT_MS, float(step.get("ms", 300))) / 1000.0)
+            out.append(f"[{i}] wait")
+            continue
         if action == "wait_stable":
             try:
-                _stable, _d, _ms = _settle(_watch_node(step), timeout=min(MAX_WAIT_MS / 1000.0, float(step.get("timeout", 5.0))))
-                out.append(f"[{i}] wait_stable ({'settled' if _stable else 'timeout'} {_ms}ms)")
+                _stable, _d, _ms = _settle(
+                    _watch_node(step),
+                    timeout=min(MAX_WAIT_MS / 1000.0, float(step.get("timeout", 5.0))),
+                )
+                out.append(
+                    f"[{i}] wait_stable ({'settled' if _stable else 'timeout'} {_ms}ms)"
+                )
             except Exception as _e:
                 out.append(f"[{i}] wait_stable skipped ({_e})")
             continue
@@ -632,8 +820,12 @@ def tool_do(args):
             continue
         try:
             step = _resolve_element(step)
-            inp.guard_user(step.get("force", force))   # stop the batch if the user took the mouse
-            if step.get("focus") is not None:          # per-step pre-focus (batch bypasses _action)
+            inp.guard_user(
+                step.get("force", force)
+            )  # stop the batch if the user took the mouse
+            if (
+                step.get("focus") is not None
+            ):  # per-step pre-focus (batch bypasses _action)
                 try:
                     _do_focus(step["focus"])
                 except Exception:
@@ -651,111 +843,374 @@ def tool_do(args):
     content = [_txt("\n".join(out))]
     return {"content": _maybe_shot(args, content, time.time())}
 
-_REGION = {"type": "array", "items": {"type": "number"}, "description": "[x,y,w,h] desktop px to crop/zoom"}
+
+_REGION = {
+    "type": "array",
+    "items": {"type": "number"},
+    "description": "[x,y,w,h] desktop px to crop/zoom",
+}
 _SHOT = {"type": "boolean", "description": "return a screenshot after the action"}
-_SPACE = {"type": "string", "description": "'view' (default): coords are pixels in the last screenshot; 'desktop': raw px; 'norm': 0-1000"}
-_VERIFY = {"type": "boolean", "description": "after the action, warn if the screen didn't change (catches misclicks)"}
-_ELEM = {"type": "number", "description": "click the element id from the last screen_screenshot(annotate=true) — server resolves exact coords (no guessing)"}
-_FORCE = {"type": "boolean", "description": "bypass the user-takeover guard; also use to take control back after a STOPPED result (the user moved the mouse)"}
-_VIEWID = {"type": "number", "description": "bind these view-space coords to the screenshot they were read from (the view#N in that shot's text). If a later screenshot has since rebound the transform, the action is rejected instead of landing on the wrong spot. Strongly recommended whenever you take more than one screenshot before clicking."}
-_FOCUS = {"type": "string", "description": "raise + keyboard-focus this app/window BEFORE the action (e.g. 'slack', 'firefox') so injected keys/clicks land in it, not whatever's focused. Keyboard events go to the focused window — a background or static-monitor app won't get them otherwise. Uses the window-info extension if loaded, else the GNOME overview."}
-_POS = {"x": {"type": "number"}, "y": {"type": "number"}, "element": _ELEM, "space": _SPACE, "view_id": _VIEWID, "focus": _FOCUS, "shot": _SHOT, "verify": _VERIFY, "force": _FORCE, "region": _REGION, "monitor": {"type": "number"}, "settle": {"type": "number"}}
+_SPACE = {
+    "type": "string",
+    "description": "'view' (default): coords are pixels in the last screenshot; 'desktop': raw px; 'norm': 0-1000",
+}
+_VERIFY = {
+    "type": "boolean",
+    "description": "after the action, warn if the screen didn't change (catches misclicks)",
+}
+_ELEM = {
+    "type": "number",
+    "description": "click the element id from the last screen_screenshot(annotate=true) — server resolves exact coords (no guessing)",
+}
+_FORCE = {
+    "type": "boolean",
+    "description": "bypass the user-takeover guard; also use to take control back after a STOPPED result (the user moved the mouse)",
+}
+_VIEWID = {
+    "type": "number",
+    "description": "bind these view-space coords to the screenshot they were read from (the view#N in that shot's text). If a later screenshot has since rebound the transform, the action is rejected instead of landing on the wrong spot. Strongly recommended whenever you take more than one screenshot before clicking.",
+}
+_FOCUS = {
+    "type": "string",
+    "description": "raise + keyboard-focus this app/window BEFORE the action (e.g. 'slack', 'firefox') so injected keys/clicks land in it, not whatever's focused. Keyboard events go to the focused window — a background or static-monitor app won't get them otherwise. Uses the window-info extension if loaded, else the GNOME overview.",
+}
+_POS = {
+    "x": {"type": "number"},
+    "y": {"type": "number"},
+    "element": _ELEM,
+    "space": _SPACE,
+    "view_id": _VIEWID,
+    "focus": _FOCUS,
+    "shot": _SHOT,
+    "verify": _VERIFY,
+    "force": _FORCE,
+    "region": _REGION,
+    "monitor": {"type": "number"},
+    "settle": {"type": "number"},
+}
 
 _RO = {"readOnlyHint": True, "destructiveHint": False}
 _ACT = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False}
 _DEST = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False}
 
 TOOLS = [
-    {"name": "screen_screenshot", "title": "Capture Screen", "annotations": _RO, "description": "Capture the desktop, lossless, auto-sized to the model's native resolution. Use to LOCATE targets (never assume which monitor) or to re-read after an action. No args = full multi-monitor overview; region=[x,y,w,h] or monitor=<i> zooms in crisp. annotate=true overlays numbered Set-of-Marks + click coords. use_cache=true (with annotate) reuses learned elements for a known screen, skipping OCR. Returns image + text (focused window, SENSE line: new elements / modal / no-op).",
-     "inputSchema": {"type": "object", "properties": {"region": _REGION, "monitor": {"type": "number"}, "annotate": {"type": "boolean"}, "use_cache": {"type": "boolean", "description": "with annotate: reuse learned elements for a known screen (skips OCR)"}, "regeo": {"type": "boolean"}, "fresh": {"type": "boolean", "description": "force a CURRENT frame on a static monitor (default true; defeats stale keepalive-resent captures). Set false (or settle=0) for the instantaneous cached frame."}}}},
-    {"name": "screen_list_monitors", "title": "List Monitors", "annotations": _RO, "description": "List monitors (origin, size, scale), desktop bounds, and open windows. Use first when choosing where to screenshot or click. Returns monitor geometry plus window list.",
-     "inputSchema": {"type": "object", "properties": {"regeo": {"type": "boolean"}}}},
-    {"name": "screen_move_mouse", "title": "Move Mouse", "annotations": _ACT, "description": "Move mouse to x,y (view-space default) or dx,dy relative. Use before click when you need an explicit hover position. Returns after the pointer settles.",
-     "inputSchema": {"type": "object", "properties": {**_POS, "dx": {"type": "number"}, "dy": {"type": "number"}}}},
-    {"name": "screen_click", "title": "Click", "annotations": _ACT, "description": "Click at x,y (view-space; mapped to the real screen). Omit x,y to click in place. Use for single UI activations. button: left|right|middle; double:bool. Returns action result (and optional post-click shot).",
-     "inputSchema": {"type": "object", "properties": {**_POS, "button": {"type": "string"}, "double": {"type": "boolean"}}}},
-    {"name": "screen_scroll", "title": "Scroll", "annotations": _ACT, "description": "Scroll the wheel (direction up|down|left|right, amount notches). Use to reveal off-screen content before screenshot. Optional x,y to position first. Returns after scroll settles.",
-     "inputSchema": {"type": "object", "properties": {**_POS, "direction": {"type": "string"}, "amount": {"type": "number"}}}},
-    {"name": "screen_drag", "title": "Drag", "annotations": _ACT, "description": "Press-drag from (x1,y1) to (x2,y2) in view-space. Use for sliders, reorder, selection. button: left|middle|right. Returns after drag completes.",
-     "inputSchema": {"type": "object", "properties": {"x1": {"type": "number"}, "y1": {"type": "number"}, "x2": {"type": "number"}, "y2": {"type": "number"}, "space": _SPACE, "view_id": _VIEWID, "button": {"type": "string"}, "shot": _SHOT, "force": _FORCE, "region": _REGION, "settle": {"type": "number"}}, "required": ["x1", "y1", "x2", "y2"]}},
-    {"name": "screen_key", "title": "Press Key", "annotations": _ACT, "description": "Press a key/combo: 'Ctrl+L', 'Enter', 'Alt+Tab', 'F5'. Use for shortcuts and confirmations. Keys go to the FOCUSED window — pass focus='appname' first (a background/static-monitor app won't receive keys otherwise). Returns action result (optional post-shot).",
-     "inputSchema": {"type": "object", "properties": {"keys": {"type": "string"}, "focus": _FOCUS, "shot": _SHOT, "verify": _VERIFY, "force": _FORCE, "region": _REGION, "settle": {"type": "number"}}, "required": ["keys"]}},
-    {"name": "screen_type", "title": "Type Text", "annotations": _ACT, "description": "Type text (Unicode ok); enter:true presses Enter after. Use to fill inputs/search boxes. Text goes to the FOCUSED window — pass focus='appname' (or call screen_focus first). Returns action result (optional post-shot).",
-     "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}, "enter": {"type": "boolean"}, "focus": _FOCUS, "shot": _SHOT, "verify": _VERIFY, "force": _FORCE, "region": _REGION, "settle": {"type": "number"}}, "required": ["text"]}},
-    {"name": "screen_focus", "title": "Focus Window", "annotations": _ACT, "description": "Raise + give KEYBOARD FOCUS to a window so injected keys/clicks land in it. Use before screen_type/screen_key on an app you haven't clicked into (the #1 reason 'I typed but nothing happened'). Match by app ('slack', 'firefox'), title substring, or window id from screen_list_monitors. Returns focus result / matched window.",
-     "inputSchema": {"type": "object", "properties": {"app": {"type": "string"}, "title": {"type": "string"}, "id": {"type": ["string", "number"]}}}},
-    {"name": "screen_do", "title": "Batch Actions", "annotations": _DEST, "description": "Run an ordered batch of actions in one call to cut round-trips. Use when a multi-step UI flow would otherwise need N tool calls. steps=[{action:'move|click|scroll|drag|key|type|wait|wait_stable', ...}]. 'wait' sleeps fixed ms; 'wait_stable' blocks until settle. shot=true optional final screenshot. Stops mid-batch if you take the mouse (force=true to override). Returns per-step results.",
-     "inputSchema": {"type": "object", "properties": {"steps": {"type": "array", "items": {"type": "object"}}, "stop_on_error": {"type": "boolean"}, "shot": _SHOT, "force": _FORCE, "region": _REGION, "monitor": {"type": "number"}, "settle": {"type": "number"}}, "required": ["steps"]}},
-    {"name": "screen_read_page", "title": "Read Page", "annotations": _ACT, "description": "Read a whole scrollable view in ONE call: auto-scrolls down until content stops moving, annotating each screen. Use instead of N rounds of scroll+screenshot. Returns full interactable inventory + a final screenshot; leaves current screen clickable by [id]. region defaults to last view; max_pages caps it; force bypasses takeover guard.",
-     "inputSchema": {"type": "object", "properties": {"region": _REGION, "max_pages": {"type": "number"}, "amount": {"type": "number"}, "settle_ms": {"type": "number"}, "force": _FORCE}}},
-    {"name": "screen_tour", "title": "Tour UI States", "annotations": _DEST, "description": "Visit several UI states in ONE call and get a labeled thumbnail of each. Use to survey/navigate without N navigate→screenshot round-trips. steps=[{label, steps:[{action:'click|scroll|key|type|move|wait', ...}], region?, settle?}]. shot_max_edge (default 1280) sizes thumbnails. Returns labeled thumbnails + step results.",
-     "inputSchema": {"type": "object", "properties": {"steps": {"type": "array", "items": {"type": "object"}, "description": "ordered stops: [{label, steps:[actions], region?, settle?}]"}, "settle": {"type": "number"}, "shot_max_edge": {"type": "number"}, "force": _FORCE}, "required": ["steps"]}},
-    {"name": "screen_wait", "title": "Wait for Settle", "annotations": _RO, "description": "Wait until the screen stops changing (settles) or timeout, then optionally screenshot. Use after an async/htmx update instead of guessing a fixed delay. Also usable as a 'wait_stable' step inside screen_do/screen_tour. Args: timeout (s, default 5), region/monitor, shot. Returns when stable or on timeout.",
-     "inputSchema": {"type": "object", "properties": {"timeout": {"type": "number"}, "thresh": {"type": "number"}, "window": {"type": "number"}, "region": _REGION, "monitor": {"type": "number"}, "shot": _SHOT}}},
-    {"name": "screen_session", "title": "Record Session", "annotations": _ACT, "description": "Session recording/replay: op=start|stop|list|status|replay-path. Use to capture a trajectory of actions+screenshots for later replay. Returns status or path for the op.",
-     "inputSchema": {"type": "object", "properties": {"op": {"type": "string"}, "id": {"type": "string"}}}},
-    {"name": "screen_reload", "title": "Reload Server", "annotations": _DEST, "description": "Hot-reload this MCP server's own code in place (re-exec, preserving the connection). Use after editing server code so tools update WITHOUT /mcp reconnect. Returns after re-exec.",
-     "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "screen_diag", "title": "Diagnostics", "annotations": _RO, "description": "Health dump: prereqs matrix (portal, window-info, uinput, gstreamer, …) with next_step hints, plus session/geo, cursor/guard state, grounding backends. Use first when capture, clicks, or the cursor guard misbehave. Returns the full capability/session report.",
-     "inputSchema": {"type": "object", "properties": {}}},
+    {
+        "name": "screen_screenshot",
+        "title": "Capture Screen",
+        "annotations": _RO,
+        "description": "Capture the desktop, lossless, auto-sized to the model's native resolution. Use to LOCATE targets (never assume which monitor) or to re-read after an action. No args = full multi-monitor overview; region=[x,y,w,h] or monitor=<i> zooms in crisp. annotate=true overlays numbered Set-of-Marks + click coords. use_cache=true (with annotate) reuses learned elements for a known screen, skipping OCR. Returns image + text (focused window, SENSE line: new elements / modal / no-op).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "region": _REGION,
+                "monitor": {"type": "number"},
+                "annotate": {"type": "boolean"},
+                "use_cache": {
+                    "type": "boolean",
+                    "description": "with annotate: reuse learned elements for a known screen (skips OCR)",
+                },
+                "regeo": {"type": "boolean"},
+                "fresh": {
+                    "type": "boolean",
+                    "description": "force a CURRENT frame on a static monitor (default true; defeats stale keepalive-resent captures). Set false (or settle=0) for the instantaneous cached frame.",
+                },
+            },
+        },
+    },
+    {
+        "name": "screen_list_monitors",
+        "title": "List Monitors",
+        "annotations": _RO,
+        "description": "List monitors (origin, size, scale), desktop bounds, and open windows. Use first when choosing where to screenshot or click. Returns monitor geometry plus window list.",
+        "inputSchema": {"type": "object", "properties": {"regeo": {"type": "boolean"}}},
+    },
+    {
+        "name": "screen_move_mouse",
+        "title": "Move Mouse",
+        "annotations": _ACT,
+        "description": "Move mouse to x,y (view-space default) or dx,dy relative. Use before click when you need an explicit hover position. Returns after the pointer settles.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {**_POS, "dx": {"type": "number"}, "dy": {"type": "number"}},
+        },
+    },
+    {
+        "name": "screen_click",
+        "title": "Click",
+        "annotations": _ACT,
+        "description": "Click at x,y (view-space; mapped to the real screen). Omit x,y to click in place. Use for single UI activations. button: left|right|middle; double:bool. Returns action result (and optional post-click shot).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                **_POS,
+                "button": {"type": "string"},
+                "double": {"type": "boolean"},
+            },
+        },
+    },
+    {
+        "name": "screen_scroll",
+        "title": "Scroll",
+        "annotations": _ACT,
+        "description": "Scroll the wheel (direction up|down|left|right, amount notches). Use to reveal off-screen content before screenshot. Optional x,y to position first. Returns after scroll settles.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                **_POS,
+                "direction": {"type": "string"},
+                "amount": {"type": "number"},
+            },
+        },
+    },
+    {
+        "name": "screen_drag",
+        "title": "Drag",
+        "annotations": _ACT,
+        "description": "Press-drag from (x1,y1) to (x2,y2) in view-space. Use for sliders, reorder, selection. button: left|middle|right. Returns after drag completes.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "x1": {"type": "number"},
+                "y1": {"type": "number"},
+                "x2": {"type": "number"},
+                "y2": {"type": "number"},
+                "space": _SPACE,
+                "view_id": _VIEWID,
+                "button": {"type": "string"},
+                "shot": _SHOT,
+                "force": _FORCE,
+                "region": _REGION,
+                "settle": {"type": "number"},
+            },
+            "required": ["x1", "y1", "x2", "y2"],
+        },
+    },
+    {
+        "name": "screen_key",
+        "title": "Press Key",
+        "annotations": _ACT,
+        "description": "Press a key/combo: 'Ctrl+L', 'Enter', 'Alt+Tab', 'F5'. Use for shortcuts and confirmations. Keys go to the FOCUSED window — pass focus='appname' first (a background/static-monitor app won't receive keys otherwise). Returns action result (optional post-shot).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "keys": {"type": "string"},
+                "focus": _FOCUS,
+                "shot": _SHOT,
+                "verify": _VERIFY,
+                "force": _FORCE,
+                "region": _REGION,
+                "settle": {"type": "number"},
+            },
+            "required": ["keys"],
+        },
+    },
+    {
+        "name": "screen_type",
+        "title": "Type Text",
+        "annotations": _ACT,
+        "description": "Type text (Unicode ok); enter:true presses Enter after. Use to fill inputs/search boxes. Text goes to the FOCUSED window — pass focus='appname' (or call screen_focus first). Returns action result (optional post-shot).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "enter": {"type": "boolean"},
+                "focus": _FOCUS,
+                "shot": _SHOT,
+                "verify": _VERIFY,
+                "force": _FORCE,
+                "region": _REGION,
+                "settle": {"type": "number"},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "screen_focus",
+        "title": "Focus Window",
+        "annotations": _ACT,
+        "description": "Raise + give KEYBOARD FOCUS to a window so injected keys/clicks land in it. Use before screen_type/screen_key on an app you haven't clicked into (the #1 reason 'I typed but nothing happened'). Match by app ('slack', 'firefox'), title substring, or window id from screen_list_monitors. Returns focus result / matched window.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "app": {"type": "string"},
+                "title": {"type": "string"},
+                "id": {"type": ["string", "number"]},
+            },
+        },
+    },
+    {
+        "name": "screen_do",
+        "title": "Batch Actions",
+        "annotations": _DEST,
+        "description": "Run an ordered batch of actions in one call to cut round-trips. Use when a multi-step UI flow would otherwise need N tool calls. steps=[{action:'move|click|scroll|drag|key|type|wait|wait_stable', ...}]. 'wait' sleeps fixed ms; 'wait_stable' blocks until settle. shot=true optional final screenshot. Stops mid-batch if you take the mouse (force=true to override). Returns per-step results.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "steps": {"type": "array", "items": {"type": "object"}},
+                "stop_on_error": {"type": "boolean"},
+                "shot": _SHOT,
+                "force": _FORCE,
+                "region": _REGION,
+                "monitor": {"type": "number"},
+                "settle": {"type": "number"},
+            },
+            "required": ["steps"],
+        },
+    },
+    {
+        "name": "screen_read_page",
+        "title": "Read Page",
+        "annotations": _ACT,
+        "description": "Read a whole scrollable view in ONE call: auto-scrolls down until content stops moving, annotating each screen. Use instead of N rounds of scroll+screenshot. Returns full interactable inventory + a final screenshot; leaves current screen clickable by [id]. region defaults to last view; max_pages caps it; force bypasses takeover guard.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "region": _REGION,
+                "max_pages": {"type": "number"},
+                "amount": {"type": "number"},
+                "settle_ms": {"type": "number"},
+                "force": _FORCE,
+            },
+        },
+    },
+    {
+        "name": "screen_tour",
+        "title": "Tour UI States",
+        "annotations": _DEST,
+        "description": "Visit several UI states in ONE call and get a labeled thumbnail of each. Use to survey/navigate without N navigate→screenshot round-trips. steps=[{label, steps:[{action:'click|scroll|key|type|move|wait', ...}], region?, settle?}]. shot_max_edge (default 1280) sizes thumbnails. Returns labeled thumbnails + step results.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "ordered stops: [{label, steps:[actions], region?, settle?}]",
+                },
+                "settle": {"type": "number"},
+                "shot_max_edge": {"type": "number"},
+                "force": _FORCE,
+            },
+            "required": ["steps"],
+        },
+    },
+    {
+        "name": "screen_wait",
+        "title": "Wait for Settle",
+        "annotations": _RO,
+        "description": "Wait until the screen stops changing (settles) or timeout, then optionally screenshot. Use after an async/htmx update instead of guessing a fixed delay. Also usable as a 'wait_stable' step inside screen_do/screen_tour. Args: timeout (s, default 5), region/monitor, shot. Returns when stable or on timeout.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "timeout": {"type": "number"},
+                "thresh": {"type": "number"},
+                "window": {"type": "number"},
+                "region": _REGION,
+                "monitor": {"type": "number"},
+                "shot": _SHOT,
+            },
+        },
+    },
+    {
+        "name": "screen_session",
+        "title": "Record Session",
+        "annotations": _ACT,
+        "description": "Session recording/replay: op=start|stop|list|status|replay-path. Use to capture a trajectory of actions+screenshots for later replay. Returns status or path for the op.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"op": {"type": "string"}, "id": {"type": "string"}},
+        },
+    },
+    {
+        "name": "screen_reload",
+        "title": "Reload Server",
+        "annotations": _DEST,
+        "description": "Hot-reload this MCP server's own code in place (re-exec, preserving the connection). Use after editing server code so tools update WITHOUT /mcp reconnect. Returns after re-exec.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "screen_diag",
+        "title": "Diagnostics",
+        "annotations": _RO,
+        "description": "Health dump: prereqs matrix (portal, window-info, uinput, gstreamer, …) with next_step hints, plus session/geo, cursor/guard state, grounding backends. Use first when capture, clicks, or the cursor guard misbehave. Returns the full capability/session report.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 HANDLERS = {
-    "screen_screenshot": tool_screenshot, "screen_list_monitors": tool_list_monitors,
+    "screen_screenshot": tool_screenshot,
+    "screen_list_monitors": tool_list_monitors,
     "screen_move_mouse": lambda a: _action("screen_move_mouse", inp.move, a),
-    "screen_click":      lambda a: _action("screen_click",      inp.click, a),
-    "screen_scroll":     lambda a: _action("screen_scroll",     inp.scroll, a),
-    "screen_drag":       lambda a: _action("screen_drag",       inp.drag, a),
-    "screen_key":        lambda a: _action("screen_key",        inp.key, a),
-    "screen_type":       lambda a: _action("screen_type",       inp.type_text, a),
+    "screen_click": lambda a: _action("screen_click", inp.click, a),
+    "screen_scroll": lambda a: _action("screen_scroll", inp.scroll, a),
+    "screen_drag": lambda a: _action("screen_drag", inp.drag, a),
+    "screen_key": lambda a: _action("screen_key", inp.key, a),
+    "screen_type": lambda a: _action("screen_type", inp.type_text, a),
     "screen_focus": tool_focus,
-    "screen_do": tool_do, "screen_tour": tool_tour, "screen_read_page": autoloop.scroll_to_reveal,
-    "screen_wait": tool_wait, "screen_session": recorder.tool_session, "screen_diag": tool_diag,
+    "screen_do": tool_do,
+    "screen_tour": tool_tour,
+    "screen_read_page": autoloop.scroll_to_reveal,
+    "screen_wait": tool_wait,
+    "screen_session": recorder.tool_session,
+    "screen_diag": tool_diag,
 }
 
-INSTRUCTIONS = ("Drive this machine's desktop. Loop: (1) screen_screenshot() overview to locate the target "
-                "(never assume which monitor; the text reports the focused window). (2) screen_screenshot(region=[x,y,w,h]) "
-                "or annotate=true to zoom/ground for crisp reading + accurate clicks. (3) Click/type with space='view' (default) "
-                "using coords as seen in the latest screenshot; add verify=true to catch misclicks, shot=true to see the result, "
-                "or screen_do=[...] to batch. screen_session starts a replayable recording.\n"
-                "FRESH FRAMES: a screenshot taken right after an action auto-settles the UI first (waits for "
-                "repainting to stop) so you always see the post-action state, never a stale/mid-transition frame — "
-                "no need to add your own wait. Pass settle=0 to skip it. A small region screenshot is the fastest, "
-                "crispest read; full-desktop is for locating only.\n"
-                "MONITOR FRAMES: GNOME streams a monitor only on damage, so a monitor that is ON but STATIC "
-                "(idle, no cursor) yields no frame until something changes — mcp-screen auto-nudges the pointer "
-                "to prime it (opt out: MCP_SCREEN_NO_NUDGE=1). A genuinely DPMS/power-saved monitor emits no "
-                "frames at all (expected, not a fault) and you cannot wake it yourself. If a screenshot reports a "
-                "monitor ASLEEP, ask the user to wake it (move the mouse onto it / press a key) and foreground the "
-                "target app, then retry; an ON-but-static note clears once the monitor next changes. Other "
-                "monitors stay capturable.\n"
-                "SELF-LEARNING (read these — they let you adapt without extra calls): responses carry a `SENSE` line "
-                "stating what changed — new elements that appeared, a modal that opened (deal with it first), or "
-                "'nothing changed' meaning your last action was a no-op/misclick (retry/re-ground). The server learns each "
-                "screen it annotates: pass use_cache=true to screen_screenshot(annotate=true) to reuse learned elements on a "
-                "known screen and skip OCR. To read a long/scrollable view, call screen_read_page ONCE instead of looping "
-                "scroll+screenshot. To survey several screens at once, use screen_tour. screen_diag shows what's been learned.\n"
-                "HUMAN OVERSIGHT: the user-takeover guard yields control the instant a human moves the mouse — a STOPPED "
-                "result means the human took over; respect it (re-plan, don't blindly force). This enacts The Agent Oath "
-                "(theagentoath.com) §2 human agency and §11 human oversight: the human stays in control of their own desktop.")
+INSTRUCTIONS = (
+    "Drive this machine's desktop. Loop: (1) screen_screenshot() overview to locate the target "
+    "(never assume which monitor; the text reports the focused window). (2) screen_screenshot(region=[x,y,w,h]) "
+    "or annotate=true to zoom/ground for crisp reading + accurate clicks. (3) Click/type with space='view' (default) "
+    "using coords as seen in the latest screenshot; add verify=true to catch misclicks, shot=true to see the result, "
+    "or screen_do=[...] to batch. screen_session starts a replayable recording.\n"
+    "FRESH FRAMES: a screenshot taken right after an action auto-settles the UI first (waits for "
+    "repainting to stop) so you always see the post-action state, never a stale/mid-transition frame — "
+    "no need to add your own wait. Pass settle=0 to skip it. A small region screenshot is the fastest, "
+    "crispest read; full-desktop is for locating only.\n"
+    "MONITOR FRAMES: GNOME streams a monitor only on damage, so a monitor that is ON but STATIC "
+    "(idle, no cursor) yields no frame until something changes — mcp-screen auto-nudges the pointer "
+    "to prime it (opt out: MCP_SCREEN_NO_NUDGE=1). A genuinely DPMS/power-saved monitor emits no "
+    "frames at all (expected, not a fault) and you cannot wake it yourself. If a screenshot reports a "
+    "monitor ASLEEP, ask the user to wake it (move the mouse onto it / press a key) and foreground the "
+    "target app, then retry; an ON-but-static note clears once the monitor next changes. Other "
+    "monitors stay capturable.\n"
+    "SELF-LEARNING (read these — they let you adapt without extra calls): responses carry a `SENSE` line "
+    "stating what changed — new elements that appeared, a modal that opened (deal with it first), or "
+    "'nothing changed' meaning your last action was a no-op/misclick (retry/re-ground). The server learns each "
+    "screen it annotates: pass use_cache=true to screen_screenshot(annotate=true) to reuse learned elements on a "
+    "known screen and skip OCR. To read a long/scrollable view, call screen_read_page ONCE instead of looping "
+    "scroll+screenshot. To survey several screens at once, use screen_tour. screen_diag shows what's been learned.\n"
+    "HUMAN OVERSIGHT: the user-takeover guard yields control the instant a human moves the mouse — a STOPPED "
+    "result means the human took over; respect it (re-plan, don't blindly force). This enacts The Agent Oath "
+    "(theagentoath.com) §2 human agency and §11 human oversight: the human stays in control of their own desktop."
+)
+
 
 def reply(mid, result=None, error=None):
     m = {"jsonrpc": "2.0", "id": mid}
-    if error: m["error"] = error
-    else: m["result"] = result
-    sys.stdout.write(json.dumps(m) + "\n"); sys.stdout.flush()
+    if error:
+        m["error"] = error
+    else:
+        m["result"] = result
+    sys.stdout.write(json.dumps(m) + "\n")
+    sys.stdout.flush()
+
 
 def main():
-    import threading, atexit, signal
-    threading.Thread(target=grounding.warmup, daemon=True).start()  # kill the cold-start model load
+    import threading
+    import atexit
+    import signal
+
+    threading.Thread(
+        target=grounding.warmup, daemon=True
+    ).start()  # kill the cold-start model load
     # Persistent PipeWire pipelines must be released on EVERY exit path or they linger
     # (native GStreamer threads keep pulling screencast buffers + drive the compositor).
     atexit.register(capture.shutdown)
     atexit.register(inp.ui.shutdown)
+
     def _bye(*_a):
         try:
             capture.shutdown()
         finally:
             os._exit(0)
+
     for _sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         try:
             signal.signal(_sig, _bye)
@@ -770,25 +1225,49 @@ def main():
                 msg = json.loads(line)
             except Exception:
                 continue
-            mid = msg.get("id"); method = msg.get("method")
+            mid = msg.get("id")
+            method = msg.get("method")
             if method == "initialize":
-                reply(mid, {"protocolVersion": "2025-11-25",
-                            "capabilities": {"tools": {"listChanged": True}},
-                            "serverInfo": {"name": "mcp-screen", "version": __version__},
-                            "instructions": INSTRUCTIONS})
+                reply(
+                    mid,
+                    {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {"tools": {"listChanged": True}},
+                        "serverInfo": {"name": "mcp-screen", "version": __version__},
+                        "instructions": INSTRUCTIONS,
+                    },
+                )
             elif method == "notifications/initialized":
                 pass
             elif method == "tools/list":
                 reply(mid, {"tools": TOOLS})
             elif method == "tools/call":
-                name = msg["params"]["name"]; args = msg["params"].get("arguments", {}) or {}
+                name = msg["params"]["name"]
+                args = msg["params"].get("arguments", {}) or {}
                 if name == "screen_reload":
-                    reply(mid, {"content": [_txt("mcp-screen hot-reloaded in place (execv); tool list refreshed")]})
+                    reply(
+                        mid,
+                        {
+                            "content": [
+                                _txt(
+                                    "mcp-screen hot-reloaded in place (execv); tool list refreshed"
+                                )
+                            ]
+                        },
+                    )
                     try:
-                        sys.stdout.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}) + "\n")
+                        sys.stdout.write(
+                            json.dumps(
+                                {
+                                    "jsonrpc": "2.0",
+                                    "method": "notifications/tools/list_changed",
+                                }
+                            )
+                            + "\n"
+                        )
                         sys.stdout.flush()
                         capture.shutdown()
-                        inp.ui.shutdown()   # release uinput devices so reload doesn't leak them
+                        inp.ui.shutdown()  # release uinput devices so reload doesn't leak them
                     except Exception:
                         pass
                     os.execv(sys.executable, [sys.executable] + sys.argv)
@@ -798,14 +1277,25 @@ def main():
                     reply(mid, res)
                     if REC.active():
                         try:
-                            resolved = list(inp.resolve_xy(args)) if {"x", "y"} <= set(args) else None
+                            resolved = (
+                                list(inp.resolve_xy(args))
+                                if {"x", "y"} <= set(args)
+                                else None
+                            )
                         except Exception:
                             resolved = None
-                        REC.log_action(name, args, (res.get("content") or [{}])[0].get("text", ""),
-                                       not res.get("isError"), int((time.time() - t0) * 1000),
-                                       resolved=resolved, view=state.SESSION.get("view"))
+                        REC.log_action(
+                            name,
+                            args,
+                            (res.get("content") or [{}])[0].get("text", ""),
+                            not res.get("isError"),
+                            int((time.time() - t0) * 1000),
+                            resolved=resolved,
+                            view=state.SESSION.get("view"),
+                        )
                 except Exception as e:
                     import traceback
+
                     tb = traceback.format_exc()
                     state.log(tb)
                     try:
@@ -813,13 +1303,24 @@ def main():
                     except Exception:
                         pass
                     if REC.active():
-                        REC.log_action(name, args, f"ERROR: {e}", False, int((time.time() - t0) * 1000))
+                        REC.log_action(
+                            name,
+                            args,
+                            f"ERROR: {e}",
+                            False,
+                            int((time.time() - t0) * 1000),
+                        )
                     reply(mid, {"content": [_txt(f"ERROR: {e}")], "isError": True})
             elif mid is not None:
-                reply(mid, {}, error={"code": -32601, "message": f"unknown method {method}"})
+                reply(
+                    mid,
+                    {},
+                    error={"code": -32601, "message": f"unknown method {method}"},
+                )
     finally:
         capture.shutdown()
         os._exit(0)
+
 
 if __name__ == "__main__":
     main()
