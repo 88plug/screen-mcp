@@ -31,8 +31,8 @@ Module map:
 - `capture.py` — one **persistent** `pipewiresrc→appsink` GStreamer pipeline **per monitor
   node**, kept PLAYING. `grab()` pulls the freshest frame; `ensure_geo()` computes per-monitor
   native-px geometry + canvas bounds; `_full_canvas()` composites. Cursor position is read
-  from `SPA_META_Cursor` via **ctypes at hardcoded x86-64 struct offsets** (PyGObject can't
-  downcast the meta) — this is load-bearing and verified against the upstream layout.
+  from `SPA_META_Cursor` via **ctypes at arch-selected struct offsets** (`get_cursor_meta_offsets()`,
+  LP64 x86_64/aarch64; unknown arch fails open). PyGObject can't downcast the meta — load-bearing.
 - `input.py` — pointer/keyboard injection. Prefers `uinput_backend` (kernel-level) when
   available, falls back to the portal `Notify*` path. Coordinate spaces: view (last screenshot
   px, default) → desktop (global native px) → logical (per-stream, what the portal wants).

@@ -20,10 +20,12 @@ calling state.ensure_session() at runtime via ensure_geo()."""
 
 import io
 import os
+import sys
 import json
 import time
 import base64
 import ctypes
+import platform
 import threading
 
 import gi
@@ -171,13 +173,65 @@ def _drop(node_id):
 # PyGObject can't downcast that meta to read its x/y, and the by-id accessor is a
 # broken binding, so we reach the fields with ctypes: pull the GstBuffer* out of the
 # PyGObject wrapper, iterate its metas, and read the x/y guints at their struct offsets.
-# Offsets are x86-64 (GstMeta = 16 bytes; roi_type@16, x@28, y@32). Best-effort: any
-# failure returns None and the guard fails open.
+#
+# Offsets derived from GStreamer headers (gst/gstmeta.h + gst/video/gstvideometa.h):
+#
+#   struct GstMeta {
+#     GstMetaFlags       flags;   /* guint — 4 bytes */
+#     const GstMetaInfo *info;    /* pointer */
+#   };
+#   struct GstVideoRegionOfInterestMeta {
+#     GstMeta meta;
+#     GQuark  roi_type;           /* guint32 */
+#     gint    id;
+#     gint    parent_id;
+#     guint   x, y, w, h;
+#     GList  *params;
+#   };
+#
+# LP64 (x86_64 / aarch64): pointer=8 → flags@0 + 4-byte pad + info@8 → GstMeta=16;
+#   roi_type@16, id@20, parent_id@24, x@28, y@32.
+# Both arches share this layout; the table keys both so platform.machine() hits.
+# Verified on x86-64 Linux against live pipewiresrc cursor meta (ctypes.Structure
+# sizeof/offsetof of the same field list matches). Unknown arch → None (fail open)
+# with a one-shot stderr log. Best-effort: any read failure also returns None.
 # ---------------------------------------------------------------------------
 _GST = ctypes.CDLL("libgstreamer-1.0.so.0")
 _GST.gst_buffer_iterate_meta.restype = ctypes.c_void_p
 _GST.gst_buffer_iterate_meta.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 _CURSOR_QUARK = GLib.quark_from_string("cursor")
+
+# machine (platform.machine().lower()) -> field byte offsets into the ROI meta.
+CURSOR_META_OFFSETS = {
+    "x86_64": {"roi_type": 16, "x": 28, "y": 32},
+    "amd64": {"roi_type": 16, "x": 28, "y": 32},  # Debian/kernel alias
+    "aarch64": {"roi_type": 16, "x": 28, "y": 32},  # same LP64 layout
+    "arm64": {"roi_type": 16, "x": 28, "y": 32},  # macOS / some distros
+}
+
+_CURSOR_META_OFFSETS_WARNED = False
+
+
+def get_cursor_meta_offsets(machine=None):
+    """Return {roi_type, x, y} byte offsets for GstVideoRegionOfInterestMeta, or None.
+
+    Pure helper (platform.machine only) so unit tests need no GStreamer. Pass
+    `machine` to pin an arch; default is the host. Unknown arch → None + one log.
+    """
+    global _CURSOR_META_OFFSETS_WARNED
+    arch = (machine if machine is not None else platform.machine()) or ""
+    arch = arch.lower()
+    off = CURSOR_META_OFFSETS.get(arch)
+    if off is not None:
+        return dict(off)
+    if not _CURSOR_META_OFFSETS_WARNED:
+        print(
+            f"mcp-screen: unknown arch {arch!r} for GstVideoRegionOfInterestMeta "
+            f"offsets; cursor meta readback disabled (fail open)",
+            file=sys.stderr,
+        )
+        _CURSOR_META_OFFSETS_WARNED = True
+    return None
 
 
 class _PyWrap(
@@ -198,6 +252,9 @@ _CURSOR = {}
 
 def _cursor_xy_from_buf(buf):
     """Read the 'cursor' ROI meta (x,y in stream frame px) off a GstBuffer, or None."""
+    offs = get_cursor_meta_offsets()
+    if offs is None:
+        return None
     try:
         bp = _PyWrap.from_address(id(buf)).obj
         st = ctypes.c_void_p(0)
@@ -205,10 +262,10 @@ def _cursor_xy_from_buf(buf):
             mp = _GST.gst_buffer_iterate_meta(bp, ctypes.byref(st))
             if not mp:
                 return None
-            if ctypes.c_uint32.from_address(mp + 16).value == _CURSOR_QUARK:
+            if ctypes.c_uint32.from_address(mp + offs["roi_type"]).value == _CURSOR_QUARK:
                 return (
-                    ctypes.c_uint32.from_address(mp + 28).value,
-                    ctypes.c_uint32.from_address(mp + 32).value,
+                    ctypes.c_uint32.from_address(mp + offs["x"]).value,
+                    ctypes.c_uint32.from_address(mp + offs["y"]).value,
                 )
     except Exception:
         return None
