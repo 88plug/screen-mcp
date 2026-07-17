@@ -5,6 +5,7 @@ repo_url: https://github.com/88plug/screen-mcp
 repo_name: 88plug/screen-mcp
 edit_uri: edit/main/docs/
 use_directory_urls: true
+strict: true
 
 theme:
   name: material
@@ -39,3 +40,7 @@ markdown_extensions:
   - pymdownx.details       # collapsible <details> admonitions
   - toc:
       permalink: true
+
+nav:
+  - Overview: index.md
+  - Grounding research: v1.1-grounding-research.md

@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.venv/
+site/
 
 # real eval/corpus data — never commit
 eval_real_corpus.json

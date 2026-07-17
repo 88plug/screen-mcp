@@ -8,7 +8,7 @@ cd "$REPO_ROOT"
 PY="${PYTHON:-python3}"
 
 echo "=== smoke: python syntax (py_compile, no imports) ==="
-"$PY" -m compileall -q server.py *.py
+"$PY" -m compileall -q ./*.py
 echo "  ok: all .py compile"
 
 echo "=== smoke: shell script syntax (bash -n) ==="
