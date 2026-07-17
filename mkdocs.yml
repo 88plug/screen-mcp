@@ -10,13 +10,13 @@ strict: true
 theme:
   name: material
   features:
-    - navigation.sections   # group nav by section, uses width well
-    - navigation.top        # back-to-top button
-    - navigation.instant    # SPA-style fast page loads
-    - content.code.copy     # copy button on code blocks (needs superfences below)
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - content.code.copy
     - search.suggest
+    - toc.follow
   palette:
-    # Light/dark toggle that follows the OS preference by default.
     - media: "(prefers-color-scheme: light)"
       scheme: default
       toggle:
@@ -35,12 +35,20 @@ markdown_extensions:
   - def_list
   - footnotes
   - tables
-  - pymdownx.highlight     # code highlighting (ships with mkdocs-material)
-  - pymdownx.superfences   # required for content.code.copy + nested fences
-  - pymdownx.details       # collapsible <details> admonitions
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
   - toc:
       permalink: true
 
 nav:
   - Overview: index.md
+  - Install & prerequisites: install.md
+  - Tool loop: tool-loop.md
+  - Tools: tools.md
+  - Guards (HIL): guards.md
+  - Pairing with os-control: pairing.md
+  - Configuration: configuration.md
   - Grounding research: v1.1-grounding-research.md
