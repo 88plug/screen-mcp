@@ -11,14 +11,15 @@ input._clip_paste interactions) monkey-patch on top of these defaults inside the
 
 import sys
 import types
+from typing import Any, cast
 
 
 def _install_gi_stub():
     if "gi" in sys.modules and "gi.repository" in sys.modules:
         return
-    gi = types.ModuleType("gi")
+    gi = cast(Any, types.ModuleType("gi"))
     gi.require_version = lambda *_a, **_kw: None
-    repo = types.ModuleType("gi.repository")
+    repo = cast(Any, types.ModuleType("gi.repository"))
 
     class _GLib:
         @staticmethod
@@ -52,7 +53,7 @@ def _install_gi_stub():
 def _install_state_stub():
     if "state" in sys.modules:
         return
-    state = types.ModuleType("state")
+    state = cast(Any, types.ModuleType("state"))
     state.SESSION = {}
     state.PORTAL = state.OBJ = state.RD = state.SC = ""
     state.bus = types.SimpleNamespace(call_sync=lambda *_a, **_kw: None)
@@ -64,7 +65,7 @@ def _install_capture_stub():
     """input.guard_user does a lazy `import capture`; stub it so importing input is enough."""
     if "capture" in sys.modules:
         return
-    cap = types.ModuleType("capture")
+    cap = cast(Any, types.ModuleType("capture"))
     cap.cursor_pos = lambda: None
     sys.modules["capture"] = cap
 

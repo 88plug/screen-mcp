@@ -66,7 +66,7 @@ class Recorder:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._dir = None  # active session dir, or None
+        self._dir: str | None = None  # active session dir, or None
         self._fh = None  # open trajectory.jsonl handle (line-buffered)
         self._seq = 0  # monotonic across actions + frames
         self._hashes = {}  # sha256 -> image_ref (frames/NNNNNN.webp) for dedup
@@ -206,8 +206,11 @@ class Recorder:
 
                 ref = self._hashes.get(sha)
                 if ref is None:
+                    d = self._dir
+                    if d is None:
+                        return None
                     fname = "frames/%06d.webp" % len(self._hashes)
-                    with open(os.path.join(self._dir, fname), "wb") as ff:
+                    with open(os.path.join(d, fname), "wb") as ff:
                         ff.write(raw)
                     self._hashes[sha] = fname
                     ref = fname
@@ -238,7 +241,10 @@ class Recorder:
         return s
 
     def _write_locked(self, obj):
-        self._fh.write(json.dumps(obj, separators=(",", ":")) + "\n")
+        fh = self._fh
+        if fh is None:
+            return
+        fh.write(json.dumps(obj, separators=(",", ":")) + "\n")
 
     def _prune_locked(self):
         """Keep only the newest REC_CAP session dirs (by mtime). Never touches the

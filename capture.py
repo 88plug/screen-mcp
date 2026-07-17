@@ -412,6 +412,8 @@ def _nudge_prime(node_id, lpx, lpy, lw, lh, sx, sy):
     acyclic (input imports state + lazily imports capture, not the reverse at module load)."""
     if os.environ.get("MCP_SCREEN_NO_NUDGE") == "1":
         return None
+    prior = None
+    inp = None
     try:
         import input as inp  # lazy: input lazily imports capture; importing it at top would cycle
 
@@ -461,7 +463,7 @@ def _nudge_prime(node_id, lpx, lpy, lw, lh, sx, sy):
         return None
     finally:
         try:  # restore the pointer wherever the user/we last had it
-            if prior is not None:
+            if prior is not None and inp is not None:
                 if inp._use_uinput():
                     import uinput_backend as _ui
 

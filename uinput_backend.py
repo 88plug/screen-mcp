@@ -17,12 +17,16 @@ this module reports unavailable and input.py falls back to the portal path. CPU-
 import os
 import time
 import threading
+from typing import Any, cast
 
 try:
     import evdev
     from evdev import UInput, AbsInfo, ecodes as e
 except Exception:  # pragma: no cover - evdev / kernel headers absent
     evdev = None
+    UInput = cast(Any, None)
+    AbsInfo = cast(Any, None)
+    e = cast(Any, None)
 
 _DEV = None
 _LOCK = threading.Lock()
@@ -63,7 +67,8 @@ def ensure_device(w, h):
         if _DEV is not None and (_W, _H) == (w, h):
             return _DEV
         try:
-            _DEV and _DEV.close()
+            if _DEV is not None:
+                _DEV.close()
         except Exception:
             pass
         _DEV = None
@@ -307,7 +312,8 @@ def shutdown():
     global _DEV
     with _LOCK:
         try:
-            _DEV and _DEV.close()
+            if _DEV is not None:
+                _DEV.close()
         except Exception:
             pass
         _DEV = None

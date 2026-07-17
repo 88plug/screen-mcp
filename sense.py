@@ -11,6 +11,8 @@ only — never server/capture/input, so it stays unit-testable on synthetic arra
 public entry is fail-open: on any error it returns an empty/None-ish result, never raises.
 All numpy ops are cheap (strided downsample, single boolean reductions)."""
 
+from typing import Any
+
 import numpy as np
 
 import state
@@ -70,7 +72,7 @@ def classify_activity(before_small, after_small, thresh=12):
     none (<0.3%): a click that did nothing (likely misclick). local (<8%): a control
     toggled. panel (<30%): a section/dropdown opened. major (>=30%): navigation/new screen."""
     b, a = _aligned(before_small, after_small)
-    if b is None:
+    if b is None or a is None:
         return {"activity": "unknown", "changed_fraction": None}
     frac = float(
         (np.abs(a.astype(np.int16) - b.astype(np.int16)).max(axis=2) > thresh).mean()
@@ -92,7 +94,7 @@ def change_bbox(before_small, after_small, view, thresh=12):
     (the space element bboxes live in), or None. Lets us keep only the elements that sit
     where pixels ACTUALLY moved — dropping OCR re-read jitter elsewhere on the frame."""
     b, a = _aligned(before_small, after_small)
-    if b is None or not view:
+    if b is None or a is None or not view:
         return None
     mask = np.abs(a.astype(np.int16) - b.astype(np.int16)).max(axis=2) > thresh
     if not mask.any():
@@ -125,7 +127,7 @@ def scroll_from_pair(before_small, after_small, thresh=12):
     Returns {moved: bool, frac: float}. Used after a real scroll to tell "it moved, there's
     more" from "nothing moved, you're at the end / it isn't scrollable"."""
     b, a = _aligned(before_small, after_small)
-    if b is None:
+    if b is None or a is None:
         return {"moved": False, "frac": 0.0}
     h = b.shape[0]
     lo, hi = int(h * 0.12), int(h * 0.88)  # drop sticky header/footer bands
@@ -258,7 +260,7 @@ def detect_overlay(before_small, after_small, new_elements, view_wh=None):
         region = None
         # Cue A: backdrop dim
         b, a = _aligned(before_small, after_small)
-        if b is not None:
+        if b is not None and a is not None:
             lb = b.astype(np.int16).mean(axis=2)
             la = a.astype(np.int16).mean(axis=2)
             darker = la < lb - 18
@@ -293,11 +295,12 @@ def detect_overlay(before_small, after_small, new_elements, view_wh=None):
 # ---------------------------------------------------------------------------
 # History ring (one prior frame + element set per session)
 # ---------------------------------------------------------------------------
-def _hist():
+def _hist() -> dict[str, Any]:
     h = state.SESSION.get("sense")
-    if h is None:
-        h = {"small": None, "view": None, "elements": None}
-        state.SESSION["sense"] = h
+    if not isinstance(h, dict):
+        new_h: dict[str, Any] = {"small": None, "view": None, "elements": None}
+        state.SESSION["sense"] = new_h
+        return new_h
     return h
 
 

@@ -15,6 +15,7 @@ No imports from server.py / state.py here (avoids circular deps)."""
 
 import os
 import threading
+from typing import Any, cast
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -28,7 +29,7 @@ try:
 
     _HAVE_CV = True
 except Exception:  # pragma: no cover - depends on host deps
-    cv2 = None  # type: ignore
+    cv2 = cast(Any, None)
     _HAVE_CV = False
 
 try:
@@ -36,7 +37,7 @@ try:
 
     _HAVE_OCR = True
 except Exception:  # pragma: no cover - depends on host deps
-    RapidOCR = None  # type: ignore
+    RapidOCR = cast(Any, None)
     _HAVE_OCR = False
 
 # OmniParser icon_detect (YOLOv8 exported to ONNX) — CPU-only, NO torch. Bundled at
@@ -50,7 +51,7 @@ try:
 
     _HAVE_OMNI = os.path.exists(_OMNI_MODEL)
 except Exception:
-    _ort = None  # type: ignore
+    _ort = cast(Any, None)
     _HAVE_OMNI = False
 
 # Module-level singletons, lazily constructed on first use. Each heavyweight session
@@ -142,7 +143,7 @@ def ocr_boxes(bgr):
     # Older versions: tuple-return of [ (quad, text, score), ... ] (possibly
     # wrapped as (result, elapse)).
     try:
-        rows = res[0] if isinstance(res, tuple) else res
+        rows: Any = res[0] if isinstance(res, tuple) else res
     except Exception:
         return []
     if not rows:
@@ -278,7 +279,7 @@ def omni_regions(bgr, conf=0.05, iou=0.45, imgsz=640):
         canvas[top : top + nh, left : left + nw] = cv2.resize(bgr, (nw, nh))
         rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
         x = np.ascontiguousarray(np.transpose(rgb, (2, 0, 1))[None])
-        out = sess.run(None, {sess.get_inputs()[0].name: x})[
+        out = cast(Any, sess.run(None, {sess.get_inputs()[0].name: x}))[
             0
         ]  # (1,5,N) = cx,cy,w,h,conf
         pred = out[0].T

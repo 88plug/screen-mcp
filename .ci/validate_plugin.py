@@ -106,18 +106,22 @@ def _frontmatter(md):
 
 for md in list(ROOT.glob("skills/**/SKILL.md")) + list(ROOT.glob("agents/**/*.md")):
     d, e = _frontmatter(md)
-    if e:
-        err(f"{rel(md)}: {e}")
-    elif not d.get("name") or not d.get("description"):
+    if e or d is None:
+        if e:
+            err(f"{rel(md)}: {e}")
+        continue
+    if not d.get("name") or not d.get("description"):
         err(
             f"{rel(md)}: frontmatter missing name/description (silently dropped by a ': ' break?)"
         )
 
 for md in list(ROOT.glob("commands/**/*.md")):
     d, e = _frontmatter(md)
-    if e:
-        err(f"{rel(md)}: {e}")
-    elif not d.get("description"):
+    if e or d is None:
+        if e:
+            err(f"{rel(md)}: {e}")
+        continue
+    if not d.get("description"):
         warn(f"{rel(md)}: command frontmatter has no description")
 
 # --- 4. hooks.json valid + scripts present/executable/parse -------------------

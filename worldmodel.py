@@ -53,7 +53,7 @@ def _dhash(pil, hx=9, hy=8):
     Returns a 16-char hex string. Structural: blind to small content churn, sensitive to
     layout. Returns None on failure."""
     try:
-        g = pil.convert("L").resize((hx, hy), Image.BILINEAR)
+        g = pil.convert("L").resize((hx, hy), Image.Resampling.BILINEAR)
         a = np.asarray(g, dtype=np.int16)
         diff = (a[:, 1:] > a[:, :-1]).flatten()
         bits = 0

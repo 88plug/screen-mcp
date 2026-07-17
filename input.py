@@ -16,6 +16,8 @@ import os
 import time
 import shutil
 import subprocess
+from typing import Any, cast
+
 import state
 import uinput_backend as ui  # kernel-level absolute-pointer path (preferred when available)
 
@@ -43,7 +45,8 @@ def _stamp_input():
 try:
     from gi.repository import GLib, Gio
 except Exception:  # pragma: no cover - host-dependent
-    GLib = Gio = None  # type: ignore
+    GLib = cast(Any, None)
+    Gio = cast(Any, None)
 
 # Linux input event button codes.
 BTN = {"left": 0x110, "right": 0x111, "middle": 0x112}
