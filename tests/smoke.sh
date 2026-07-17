@@ -22,3 +22,11 @@ for j in .claude-plugin/plugin.json .claude-plugin/marketplace.json marketplace-
 done
 
 echo "=== smoke: all good ==="
+
+echo "== run-python launcher =="
+test -f scripts/run-python.sh
+bash -n scripts/run-python.sh
+bash -n bin/screen-mcp
+grep -q 'run-python.sh' bin/screen-mcp
+bash scripts/run-python.sh -c 'import sys; assert sys.version_info >= (3, 10)'
+echo "  ok: run-python"

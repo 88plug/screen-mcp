@@ -139,7 +139,10 @@ def _mcp_servers():
                 pass
     return servers
 
-PATH_FRAGILE = {"uv", "uvx", "npx", "bunx", "pnpm", "yarn", "deno", "bun", "node", "pipx"}
+PATH_FRAGILE = {
+    "uv", "uvx", "npx", "bunx", "pnpm", "yarn", "deno", "bun", "node", "pipx",
+    "python", "python3",
+}
 for key, spec in _mcp_servers().items():
     if not isinstance(spec, dict):
         continue
