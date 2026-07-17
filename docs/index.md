@@ -3,7 +3,7 @@
 Give a model **eyes and hands** on a Linux Wayland desktop: screenshot, click, type, scroll, drag, and read any visible app.
 
 [![plugin-validate](https://github.com/88plug/screen-mcp/actions/workflows/plugin-validate.yml/badge.svg)](https://github.com/88plug/screen-mcp/actions/workflows/plugin-validate.yml)
-[![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue?style=flat)](https://github.com/88plug/screen-mcp/blob/main/LICENSE.md)
+[![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue?style=flat)](https://github.com/88plug/screen-mcp/blob/main/LICENSE)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2?style=flat)](https://github.com/88plug/claude-code-plugins)
 [![Docs](https://img.shields.io/badge/docs-online-2ea44f?style=flat)](https://88plug.github.io/screen-mcp/)
 
@@ -16,12 +16,24 @@ screen-mcp is an MCP server that lets an agent see and operate your **GNOME/Wayl
 /plugin install screen-mcp@88plug
 ```
 
-One-time **system** packages (PipeWire + GStreamer + portal) then **Python** deps — full one-liners in [Install](install.md):
+One-time **system** packages (PipeWire + GStreamer + portal) then **Python** deps.
+The marketplace cannot install these. Full detail: [Install](install.md).
 
 ```bash
-# Debian/Ubuntu example (see Install for Arch)
-sudo apt install python3-gi gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-  gstreamer1.0-libav pipewire xdg-desktop-portal-gnome wl-clipboard fonts-dejavu
+# --- system (pick your distro) ---
+# Debian / Ubuntu
+sudo apt install python3-gi python3-gi-cairo gir1.2-gstreamer-1.0 \
+  gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+  gstreamer1.0-libav pipewire pipewire-pulse xdg-desktop-portal-gnome \
+  wl-clipboard fonts-dejavu
+
+# Arch / Manjaro
+sudo pacman -S python-gobject gobject-introspection \
+  gstreamer gst-plugins-base gst-plugins-good gst-libav \
+  pipewire pipewire-pulse xdg-desktop-portal-gnome \
+  wl-clipboard ttf-dejavu
+
+# --- Python ---
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
@@ -97,4 +109,4 @@ After editing server code, call `screen_reload` in the running session to re-exe
 
 ## License
 
-[FSL-1.1-ALv2](https://github.com/88plug/screen-mcp/blob/main/LICENSE.md) © 2026 [88plug](https://github.com/88plug). Converts to Apache 2.0 two years after each release.
+[FSL-1.1-ALv2](https://github.com/88plug/screen-mcp/blob/main/LICENSE) © 2026 [88plug](https://github.com/88plug). Converts to Apache 2.0 two years after each release.
