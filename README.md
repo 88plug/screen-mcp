@@ -2,27 +2,29 @@
 
 # screen-mcp
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/88plug/screen-mcp)
-
-Give a model eyes and hands on a Linux Wayland desktop: screenshot, click, type, scroll, drag, and read any visible app.
+Linux Wayland desktop automation for Claude Code — MCP server that screenshots, clicks, types, scrolls, drags, and reads any visible app.
 
 [![plugin-validate](https://github.com/88plug/screen-mcp/actions/workflows/plugin-validate.yml/badge.svg)](https://github.com/88plug/screen-mcp/actions/workflows/plugin-validate.yml)
 [![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue?style=flat)](LICENSE)
-[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2?style=flat)](https://github.com/88plug/claude-code-plugins)
 [![Docs](https://img.shields.io/badge/docs-online-2ea44f?style=flat)](https://88plug.github.io/screen-mcp/)
+[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-8A2BE2?style=flat)](https://github.com/88plug/claude-code-plugins)
+[![DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/88plug/screen-mcp)
 
 </div>
 
-screen-mcp is an MCP server for Claude Code that lets a model see and operate
-your GNOME/Wayland desktop. It captures any monitor through PipeWire, drives the
-pointer and keyboard through the `xdg-desktop-portal` RemoteDesktop portal, and
-optionally reads the screen with OCR and grounds icons with an OmniParser ONNX
-model. It is for developers who want an agent that can use real desktop apps,
-not just a browser. It is pure Python and runs CPU-only.
+screen-mcp is an MCP server and Claude Code plugin for desktop automation on
+GNOME/Wayland. It captures any monitor through PipeWire, drives pointer and
+keyboard via the `xdg-desktop-portal` RemoteDesktop portal, and optionally reads
+the screen with OCR plus OmniParser icon grounding. Pure Python, CPU-only —
+built for AI agents that need real computer-use on native Linux apps, not just a
+browser.
 
-## Quickstart
+It ships the MCP tools plus a `drive-screen` skill that encodes the locate →
+ground → act → confirm loop so the model uses screenshots and clicks well out of
+the box. Developers get productivity tools that reach every visible window —
+including native Wayland apps that `xdotool` and XTEST cannot touch.
 
-Install the plugin in Claude Code:
+## Install
 
 ```text
 /plugin marketplace add 88plug/claude-code-plugins
@@ -53,58 +55,47 @@ python3 -m venv .venv
 # minimum only:  .venv/bin/pip install 'numpy>=1.26' 'Pillow>=10.0'
 ```
 
-On first use the desktop portal pops a consent dialog asking which monitor(s) to
-share. Pick one, and ask the model to take a screenshot:
+## Quickstart
+
+On first use the desktop portal asks which monitor(s) to share. Pick one, then:
 
 ```text
 Take a screenshot of my desktop and tell me which window is focused.
 ```
 
-You should get back a labeled capture plus the focused-window name within a few
-seconds. The portal returns a restore token cached at `~/.config/mcp-screen` so
-later runs are silent.
+You get a labeled capture plus the focused-window name within a few seconds. The
+portal restore token is cached at `~/.config/mcp-screen` so later runs are silent.
 
 > [!IMPORTANT]
-> screen-mcp runs on Linux + Wayland + GNOME only, and grounding is CPU-only by
+> screen-mcp runs on Linux + Wayland + GNOME only. Grounding is CPU-only by
 > design. See [Requirements](#requirements) before installing.
 
-## What it does
+## Features
 
-The server turns one capture-and-act loop into MCP tools a model can call
-directly:
-
-- Screenshot any monitor or region, with numbered Set-of-Marks overlays and
-  click coordinates.
-- Click, type, scroll, and drag in any visible app, including native Wayland
-  apps that `xdotool` and XTEST cannot reach.
-- Read on-screen text with OCR (RapidOCR) and ground icons with an OmniParser
-  ONNX model (both optional).
-- Sense changes: an ambient layer diffs frames so the agent knows when something
-  opened or when an action was a no-op.
-- Cache learned screens: a write-through world model lets a recognized screen
-  skip OCR on the next visit.
-- Gate destructive actions: an opt-in ack guard blocks close-combos and
-  destructive-keyword clicks until the caller passes a confirmation token.
-
-It also ships a `drive-screen` skill that encodes the locate → ground → act →
-confirm loop, so the model knows how to use the tools well out of the box.
+| Feature | Detail |
+|---|---|
+| Screenshot + Set-of-Marks | Capture any monitor or region with numbered overlays and click coordinates |
+| Click / type / scroll / drag | Drive any visible app over xdg-desktop-portal, including native Wayland |
+| OCR + icon grounding | Optional RapidOCR text read and OmniParser ONNX icon grounding |
+| Ambient change sense | Frame diffs so the agent knows when something opened or an action no-op'd |
+| World-model cache | Write-through screen memory skips OCR on recognized UIs |
+| Ack guard | Opt-in gate blocks close-combos and destructive-keyword clicks until confirmed |
+| `drive-screen` skill | Claude skill for the locate → ground → act → confirm computer-use loop |
 
 ## Principles — The Agent Oath
 
-screen-mcp is a reference **enforcer** of [The Agent Oath](https://theagentoath.com):
-the **user-takeover guard** yields control the instant a human moves the mouse (a
-`STOPPED` result), keeping the human in charge of their own desktop. That's §2
-(human agency) and §11 (human oversight) made executable — *don't fight the human
-for the mouse.* The opt-in ack gate (§7, don't bypass safety) and the on-screen
-visibility of every action (§5, transparency) round it out.
+screen-mcp is a reference **enforcer** of [The Agent Oath](https://theagentoath.com).
+The **user-takeover guard** yields the instant a human moves the mouse (`STOPPED`
+result) — §2 human agency and §11 human oversight, executable. Opt-in ack gate
+(§7) and on-screen visibility of every action (§5) round it out.
 
 ## MCP tools
 
-These are the tools the server exposes. Every action also accepts `space`
-(`view` / `desktop` / `norm`, default `view` — coords as seen in the last
-screenshot), `shot: true` to return a screenshot after, `verify: true` to warn
-on no-change misclicks, `force: true` to bypass the user-takeover guard, and
-`element: <id>` to click an element id from the last annotated shot.
+Every action also accepts `space` (`view` / `desktop` / `norm`, default `view` —
+coords as seen in the last screenshot), `shot: true` for a post-action shot,
+`verify: true` to warn on no-change misclicks, `force: true` to bypass the
+user-takeover guard, and `element: <id>` to click an element id from the last
+annotated shot.
 
 | Tool | What it does |
 |---|---|
