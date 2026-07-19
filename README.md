@@ -2,7 +2,7 @@
 
 # screen-mcp
 
-Linux Wayland desktop automation for Claude Code — MCP server that screenshots, clicks, types, scrolls, drags, and reads any visible app.
+Linux Wayland computer-use MCP for Claude Code and Grok — screenshot, click, type, scroll, drag, read any desktop app.
 
 [![plugin-validate](https://github.com/88plug/screen-mcp/actions/workflows/plugin-validate.yml/badge.svg)](https://github.com/88plug/screen-mcp/actions/workflows/plugin-validate.yml)
 [![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue?style=flat)](LICENSE)
@@ -12,12 +12,12 @@ Linux Wayland desktop automation for Claude Code — MCP server that screenshots
 
 </div>
 
-screen-mcp is an MCP server and Claude Code plugin for desktop automation on
-GNOME/Wayland. It captures any monitor through PipeWire, drives pointer and
-keyboard via the `xdg-desktop-portal` RemoteDesktop portal, and optionally reads
-the screen with OCR plus OmniParser icon grounding. Pure Python, CPU-only —
-built for AI agents that need real computer-use on native Linux apps, not just a
-browser.
+screen-mcp is an MCP server and plugin for Claude Code and Grok for desktop
+automation on GNOME/Wayland. It captures any monitor through PipeWire, drives
+pointer and keyboard via the `xdg-desktop-portal` RemoteDesktop portal, and
+optionally reads the screen with OCR plus OmniParser icon grounding. Pure
+Python, CPU-only — built for AI agents that need real computer-use on native
+Linux apps, not just a browser.
 
 It ships the MCP tools plus a `drive-screen` skill that encodes the locate →
 ground → act → confirm loop so the model uses screenshots and clicks well out of
@@ -25,6 +25,8 @@ the box. Developers get productivity tools that reach every visible window —
 including native Wayland apps that `xdotool` and XTEST cannot touch.
 
 ## Install
+
+### Claude Code
 
 ```text
 /plugin marketplace add 88plug/claude-code-plugins
@@ -37,7 +39,6 @@ including native Wayland apps that `xdotool` and XTEST cannot touch.
 grok plugin marketplace add 88plug/claude-code-plugins
 grok plugin install screen-mcp@88plug --trust
 ```
-
 
 Then install **system packages** (once per machine) and **Python deps** (plugin
 venv). The marketplace cannot install these for you.
