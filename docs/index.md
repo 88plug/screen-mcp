@@ -26,7 +26,7 @@ grok plugin install screen-mcp@88plug --trust
 ```
 
 One-time **system** packages (PipeWire + GStreamer + portal) then **Python** deps.
-The marketplace cannot install these. Full detail: [Install](https://github.com/88plug/screen-mcp/blob/main/install.md).
+The marketplace cannot install these. Full detail: [Install](install.md).
 
 ```bash
 # --- system (pick your distro) ---
@@ -55,19 +55,19 @@ Take a screenshot of my desktop and tell me which window is focused.
 You get a labeled capture plus the focused-window name. The portal restore token is cached at `~/.config/mcp-screen` so later runs are silent.
 
 !!! important
-    Linux + Wayland + GNOME only. Grounding is CPU-only by design. Read [Install & prerequisites](https://github.com/88plug/screen-mcp/blob/main/install.md) before expecting clicks to work.
+    Linux + Wayland + GNOME only. Grounding is CPU-only by design. Read [Install & prerequisites](install.md) before expecting clicks to work.
 
 ## Start here
 
 | Page | When to open it |
 |---|---|
-| [Install & prerequisites](https://github.com/88plug/screen-mcp/blob/main/install.md) | First setup, missing portal / GStreamer / uinput |
-| [Tool loop](https://github.com/88plug/screen-mcp/blob/main/tool-loop.md) | How to drive the desktop without misclicks |
-| [Tools](https://github.com/88plug/screen-mcp/blob/main/tools.md) | Full MCP tool list (matches `server.py` `TOOLS`) |
-| [Guards (HIL)](https://github.com/88plug/screen-mcp/blob/main/guards.md) | User-takeover, destructive ack, audit log |
-| [Pairing with os-control](https://github.com/88plug/screen-mcp/blob/main/pairing.md) | GUI + system-service stack |
-| [Configuration](https://github.com/88plug/screen-mcp/blob/main/configuration.md) | Env vars and data paths |
-| [Grounding research](https://github.com/88plug/screen-mcp/blob/main/v1.1-grounding-research.md) | Why OmniParser stays; what leaderboards mean for CPU |
+| [Install & prerequisites](install.md) | First setup, missing portal / GStreamer / uinput |
+| [Tool loop](tool-loop.md) | How to drive the desktop without misclicks |
+| [Tools](tools.md) | Full MCP tool list (matches `server.py` `TOOLS`) |
+| [Guards (HIL)](guards.md) | User-takeover, destructive ack, audit log |
+| [Pairing with os-control](pairing.md) | GUI + system-service stack |
+| [Configuration](configuration.md) | Env vars and data paths |
+| [Grounding research](v1.1-grounding-research.md) | Why OmniParser stays; what leaderboards mean for CPU |
 
 ## What you get
 
@@ -87,7 +87,7 @@ Ships a `drive-screen` skill that encodes the locate → ground → act → conf
 screen_screenshot()  →  annotate / region zoom  →  click|type|key  →  re-shot / SENSE
 ```
 
-Details, coordinate rules, and gotchas: [Tool loop](https://github.com/88plug/screen-mcp/blob/main/tool-loop.md).
+Details, coordinate rules, and gotchas: [Tool loop](tool-loop.md).
 
 ## Principles — The Agent Oath
 
@@ -97,7 +97,7 @@ screen-mcp is a reference **enforcer** of [The Agent Oath](https://theagentoath.
 - **Opt-in ack gate** — destructive combos / keywords need an explicit confirmation token.
 - **On-screen visibility** — every action is visible on the real desktop.
 
-See [Guards (HIL)](https://github.com/88plug/screen-mcp/blob/main/guards.md).
+See [Guards (HIL)](guards.md).
 
 ## Pairing
 
@@ -106,7 +106,7 @@ See [Guards (HIL)](https://github.com/88plug/screen-mcp/blob/main/guards.md).
 | Desktop (GUI eyes + hands) | **screen-mcp** (this project) | Capture + inject into visible apps |
 | Host (services / power / journal) | [os-control-mcp](https://88plug.github.io/os-control-mcp/) | systemd, logind, journald, D-Bus |
 
-They share a human-in-the-loop philosophy and complement each other. See [Pairing with os-control](https://github.com/88plug/screen-mcp/blob/main/pairing.md).
+They share a human-in-the-loop philosophy and complement each other. See [Pairing with os-control](pairing.md).
 
 ## Development
 

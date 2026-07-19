@@ -132,7 +132,8 @@ annotated shot.
 
 - Linux + Wayland + GNOME. The awareness layer uses a bundled GNOME Shell
   extension; AT-SPI is the fallback for GTK apps.
-- Python 3.10+ (tested on 3.14).
+- Python 3.10+ runtime (tested on 3.14). CI pins **3.12** because optional
+  `rapidocr-onnxruntime` has no py3.13 wheels yet (`requires_python <3.13`).
 - GStreamer >= 1.28 (uses `leaky-type`; the older `drop=` was removed in 1.28).
 - PipeWire and `xdg-desktop-portal-gnome`.
 - `wl-clipboard` for the Unicode paste path in `screen_type`.
@@ -186,14 +187,14 @@ half-works.
 
 ## Manual MCP setup
 
-If you are not using the plugin, wire the server in directly. Add to
-`~/.claude.json` under `mcpServers`:
+If you are not using the plugin, wire the server via the launcher (resolves host
+Python / `.venv` through `scripts/run-python.sh` — never bare `python3` on thin
+Claude spawn PATH). Add to `~/.claude.json` under `mcpServers`:
 
 ```json
 {
   "screen": {
-    "command": "python3",
-    "args": ["/path/to/screen-mcp/server.py"]
+    "command": "/path/to/screen-mcp/bin/screen-mcp"
   }
 }
 ```

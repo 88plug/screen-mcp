@@ -118,6 +118,7 @@ def test_guard_user_noop_when_never_commanded():
 
 def test_guard_user_raises_on_fresh_divergence(monkeypatch):
     import capture
+
     inp.state.SESSION["cmd_cursor"] = (100, 100)
     inp.state.SESSION["cmd_node"] = 1
     monkeypatch.setattr(capture, "cursor_sample_age", lambda node=None: 0.1)
@@ -133,15 +134,19 @@ def test_guard_user_fails_open_on_stale_sample(monkeypatch):
     point forever, false-firing identically each time (confirmed live 2026-07-03: repeated
     STOPPED errors reporting the IDENTICAL "live" position across unrelated clicks)."""
     import capture
+
     inp.state.SESSION["cmd_cursor"] = (100, 100)
     inp.state.SESSION["cmd_node"] = 1
-    monkeypatch.setattr(capture, "cursor_sample_age", lambda node=None: inp.GUARD_STALE_S + 1)
+    monkeypatch.setattr(
+        capture, "cursor_sample_age", lambda node=None: inp.GUARD_STALE_S + 1
+    )
     monkeypatch.setattr(capture, "cursor_pos", lambda **kw: (900, 900))
     inp.guard_user()  # must NOT raise — the "live" reading can't be trusted
 
 
 def test_guard_user_force_bypasses_even_with_fresh_divergence(monkeypatch):
     import capture
+
     inp.state.SESSION["cmd_cursor"] = (100, 100)
     inp.state.SESSION["cmd_node"] = 1
     monkeypatch.setattr(capture, "cursor_sample_age", lambda node=None: 0.1)

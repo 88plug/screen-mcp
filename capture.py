@@ -266,7 +266,10 @@ def _cursor_xy_from_buf(buf):
             mp = _GST.gst_buffer_iterate_meta(bp, ctypes.byref(st))
             if not mp:
                 return None
-            if ctypes.c_uint32.from_address(mp + offs["roi_type"]).value == _CURSOR_QUARK:
+            if (
+                ctypes.c_uint32.from_address(mp + offs["roi_type"]).value
+                == _CURSOR_QUARK
+            ):
                 return (
                     ctypes.c_uint32.from_address(mp + offs["x"]).value,
                     ctypes.c_uint32.from_address(mp + offs["y"]).value,
@@ -538,7 +541,9 @@ def _nudge_prime(node_id, lpx, lpy, lw, lh, sx, sy):
             if sample is not None:
                 break
         if sample is None:
-            _NUDGE_DEBUG[node_id] = "wiggled the pointer but no sample arrived within ~3s"
+            _NUDGE_DEBUG[node_id] = (
+                "wiggled the pointer but no sample arrived within ~3s"
+            )
             return None
         _NUDGE_DEBUG[node_id] = "primed OK"
         return _sample_to_rgba(sample)
@@ -861,8 +866,11 @@ def asleep_hint(monitor=None):
     which = f"Monitor {int(monitor)}" if monitor is not None else f"Monitor(s) {idle}"
     powers = {geo[i].get("power", "unknown") for i in sel if i < len(geo)}
     # Debug: why did priming actually fail for these nodes, verbatim from _nudge_prime.
-    dbg = "; ".join(f"node {geo[i]['node']}: {_NUDGE_DEBUG.get(geo[i]['node'], 'not attempted')}"
-                     for i in sel if i < len(geo))
+    dbg = "; ".join(
+        f"node {geo[i]['node']}: {_NUDGE_DEBUG.get(geo[i]['node'], 'not attempted')}"
+        for i in sel
+        if i < len(geo)
+    )
     if powers == {"off"}:
         return (
             f"{which} is ASLEEP (DPMS/power-save): a blanked Wayland output emits no frames, "

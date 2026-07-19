@@ -10,7 +10,7 @@ screen-mcp targets a specific stack. It will not run on macOS, Windows, X11-only
 | Layer | Need |
 |---|---|
 | OS / session | Linux, Wayland, GNOME Shell |
-| Python | 3.10+ (tested on 3.14) |
+| Python | 3.10+ runtime (tested on 3.14). CI pins 3.12: optional `rapidocr-onnxruntime` lacks py3.13 wheels |
 | Capture | GStreamer ≥ 1.28 (`leaky-type`; older `drop=` removed in 1.28), PipeWire, portal ScreenCast |
 | Input | portal RemoteDesktop; optional `/dev/uinput` + `evdev` for the kernel backend |
 | Clipboard | `wl-clipboard` for Unicode paste in `screen_type` |
@@ -21,9 +21,18 @@ Grounding is **CPU-only by design**. The server hard-disables the GPU (`CUDA_VIS
 
 ## Plugin install (recommended)
 
+### Claude Code
+
 ```text
 /plugin marketplace add 88plug/claude-code-plugins
 /plugin install screen-mcp@88plug
+```
+
+### Grok Build
+
+```text
+grok plugin marketplace add 88plug/claude-code-plugins
+grok plugin install screen-mcp@88plug --trust
 ```
 
 The plugin manifest cannot install system packages or a venv for you.
@@ -60,24 +69,13 @@ Or use the helper:
 
 ## Manual MCP setup
 
-Wire the server in `~/.claude.json` under `mcpServers`:
+Wire the server via the plugin launcher (resolves host Python / `.venv` through
+`scripts/run-python.sh` — never bare `python3` on thin spawn PATH):
 
 ```json
 {
   "screen": {
-    "command": "python3",
-    "args": ["/path/to/screen-mcp/server.py"]
-  }
-}
-```
-
-Prefer the project venv's Python if system packages are incomplete:
-
-```json
-{
-  "screen": {
-    "command": "/path/to/screen-mcp/.venv/bin/python",
-    "args": ["/path/to/screen-mcp/server.py"]
+    "command": "/path/to/screen-mcp/bin/screen-mcp"
   }
 }
 ```

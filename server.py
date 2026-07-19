@@ -1273,7 +1273,17 @@ def main():
                     os.execv(sys.executable, [sys.executable] + sys.argv)
                 t0 = time.time()
                 try:
-                    res = HANDLERS[name](args)
+                    handler = HANDLERS.get(name)
+                    if handler is None:
+                        reply(
+                            mid,
+                            {
+                                "content": [_txt(f"unknown tool: {name}")],
+                                "isError": True,
+                            },
+                        )
+                        continue
+                    res = handler(args)
                     reply(mid, res)
                     if REC.active():
                         try:

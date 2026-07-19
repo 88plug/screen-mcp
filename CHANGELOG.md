@@ -2,6 +2,13 @@
 
 Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
 
+## 2026.7.24
+
+- 88plug compliance: dual Grok install on docs/install; MkDocs-relative doc links
+  (drop 404 `blob/main/*.md` paths); Manual MCP docs use `bin/screen-mcp` (T1
+  launcher, not bare python3); document CI Python 3.12 pin (rapidocr wheels);
+  unknown-tool `tools/call` returns MCP `isError` result; ruff format clean.
+
 ## 2026.7.23
 
 - Fixed the takeover guard false-firing forever on a STATIC monitor: `cursor_pos(prefer_node=...)`
