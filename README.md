@@ -31,6 +31,14 @@ including native Wayland apps that `xdotool` and XTEST cannot touch.
 /plugin install screen-mcp@88plug
 ```
 
+### Grok Build
+
+```text
+grok plugin marketplace add 88plug/claude-code-plugins
+grok plugin install screen-mcp@88plug --trust
+```
+
+
 Then install **system packages** (once per machine) and **Python deps** (plugin
 venv). The marketplace cannot install these for you.
 

@@ -16,6 +16,14 @@ screen-mcp is an MCP server that lets an agent see and operate your **GNOME/Wayl
 /plugin install screen-mcp@88plug
 ```
 
+### Grok Build
+
+```text
+grok plugin marketplace add 88plug/claude-code-plugins
+grok plugin install screen-mcp@88plug --trust
+```
+
+
 One-time **system** packages (PipeWire + GStreamer + portal) then **Python** deps.
 The marketplace cannot install these. Full detail: [Install](install.md).
 
