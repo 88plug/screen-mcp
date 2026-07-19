@@ -25,7 +25,7 @@ grok plugin install screen-mcp@88plug --trust
 
 
 One-time **system** packages (PipeWire + GStreamer + portal) then **Python** deps.
-The marketplace cannot install these. Full detail: [Install](install.md).
+The marketplace cannot install these. Full detail: [Install](https://github.com/88plug/screen-mcp/blob/main/install.md).
 
 ```bash
 # --- system (pick your distro) ---
@@ -54,19 +54,19 @@ Take a screenshot of my desktop and tell me which window is focused.
 You get a labeled capture plus the focused-window name. The portal restore token is cached at `~/.config/mcp-screen` so later runs are silent.
 
 !!! important
-    Linux + Wayland + GNOME only. Grounding is CPU-only by design. Read [Install & prerequisites](install.md) before expecting clicks to work.
+    Linux + Wayland + GNOME only. Grounding is CPU-only by design. Read [Install & prerequisites](https://github.com/88plug/screen-mcp/blob/main/install.md) before expecting clicks to work.
 
 ## Start here
 
 | Page | When to open it |
 |---|---|
-| [Install & prerequisites](install.md) | First setup, missing portal / GStreamer / uinput |
-| [Tool loop](tool-loop.md) | How to drive the desktop without misclicks |
-| [Tools](tools.md) | Full MCP tool list (matches `server.py` `TOOLS`) |
-| [Guards (HIL)](guards.md) | User-takeover, destructive ack, audit log |
-| [Pairing with os-control](pairing.md) | GUI + system-service stack |
-| [Configuration](configuration.md) | Env vars and data paths |
-| [Grounding research](v1.1-grounding-research.md) | Why OmniParser stays; what leaderboards mean for CPU |
+| [Install & prerequisites](https://github.com/88plug/screen-mcp/blob/main/install.md) | First setup, missing portal / GStreamer / uinput |
+| [Tool loop](https://github.com/88plug/screen-mcp/blob/main/tool-loop.md) | How to drive the desktop without misclicks |
+| [Tools](https://github.com/88plug/screen-mcp/blob/main/tools.md) | Full MCP tool list (matches `server.py` `TOOLS`) |
+| [Guards (HIL)](https://github.com/88plug/screen-mcp/blob/main/guards.md) | User-takeover, destructive ack, audit log |
+| [Pairing with os-control](https://github.com/88plug/screen-mcp/blob/main/pairing.md) | GUI + system-service stack |
+| [Configuration](https://github.com/88plug/screen-mcp/blob/main/configuration.md) | Env vars and data paths |
+| [Grounding research](https://github.com/88plug/screen-mcp/blob/main/v1.1-grounding-research.md) | Why OmniParser stays; what leaderboards mean for CPU |
 
 ## What you get
 
@@ -86,7 +86,7 @@ Ships a `drive-screen` skill that encodes the locate → ground → act → conf
 screen_screenshot()  →  annotate / region zoom  →  click|type|key  →  re-shot / SENSE
 ```
 
-Details, coordinate rules, and gotchas: [Tool loop](tool-loop.md).
+Details, coordinate rules, and gotchas: [Tool loop](https://github.com/88plug/screen-mcp/blob/main/tool-loop.md).
 
 ## Principles — The Agent Oath
 
@@ -96,7 +96,7 @@ screen-mcp is a reference **enforcer** of [The Agent Oath](https://theagentoath.
 - **Opt-in ack gate** — destructive combos / keywords need an explicit confirmation token.
 - **On-screen visibility** — every action is visible on the real desktop.
 
-See [Guards (HIL)](guards.md).
+See [Guards (HIL)](https://github.com/88plug/screen-mcp/blob/main/guards.md).
 
 ## Pairing
 
@@ -105,7 +105,7 @@ See [Guards (HIL)](guards.md).
 | Desktop (GUI eyes + hands) | **screen-mcp** (this project) | Capture + inject into visible apps |
 | Host (services / power / journal) | [os-control-mcp](https://88plug.github.io/os-control-mcp/) | systemd, logind, journald, D-Bus |
 
-They share a human-in-the-loop philosophy and complement each other. See [Pairing with os-control](pairing.md).
+They share a human-in-the-loop philosophy and complement each other. See [Pairing with os-control](https://github.com/88plug/screen-mcp/blob/main/pairing.md).
 
 ## Development
 
@@ -118,3 +118,15 @@ After editing server code, call `screen_reload` in the running session to re-exe
 ## License
 
 [FSL-1.1-ALv2](https://github.com/88plug/screen-mcp/blob/main/LICENSE) © 2026 [88plug](https://github.com/88plug). Converts to Apache 2.0 two years after each release.
+
+## Features
+
+| Feature | Detail |
+|---|---|
+| Screenshot + Set-of-Marks | Capture any monitor or region with numbered overlays and click coordinates |
+| Click / type / scroll / drag | Drive any visible app over xdg-desktop-portal, including native Wayland |
+| OCR + icon grounding | Optional RapidOCR text read and OmniParser ONNX icon grounding |
+| Ambient change sense | Frame diffs so the agent knows when something opened or an action no-op'd |
+| World-model cache | Write-through screen memory skips OCR on recognized UIs |
+| Ack guard | Opt-in gate blocks close-combos and destructive-keyword clicks until confirmed |
+| `drive-screen` skill | Claude skill for the locate → ground → act → confirm computer-use loop |
