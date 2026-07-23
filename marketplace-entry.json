@@ -4,7 +4,7 @@
     "source": "url",
     "url": "https://github.com/88plug/screen-mcp.git"
   },
-  "description": "Eyes and hands on a Linux Wayland desktop: screenshot any monitor and click/type/scroll/drag/read any visible app over xdg-desktop-portal (RemoteDesktop + ScreenCast), with optional OCR + OmniParser icon grounding. Pure-Python, CPU-only. GNOME/Wayland only. Ships the MCP server + a drive-screen skill.",
+  "description": "Eyes and hands on a Linux Wayland desktop: screenshot, click, type, scroll, drag, read — plus screen_watch (~1 fps human-eye) to catch thrashing UIs. Pure-Python, CPU-only. GNOME/Wayland. drive-screen skill: locate → ground → act → confirm/watch.",
   "category": "productivity",
   "tags": [
     "type:mcp",

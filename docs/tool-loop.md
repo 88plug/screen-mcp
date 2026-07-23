@@ -3,17 +3,34 @@
 Desktop control is a **loop**, not a single call:
 
 ```text
-locate  →  ground  →  act  →  confirm
+locate  →  ground  →  act  →  confirm (watch at ~1 fps when UI can thrash)
 ```
 
 The bundled `drive-screen` skill encodes the same loop for Claude Code. This page is the human-readable version.
+
+## Human eyes (1 fps default)
+
+A single screenshot is a **glance**. Humans catch broken canvases, thrashing force-directed graphs, and spinners by **watching**. Use:
+
+```text
+screen_watch(region=[x,y,w,h], fps=1, seconds=6)
+```
+
+| Verdict | What a human would say |
+|---|---|
+| `settled` | Looks stable — act |
+| `evolving` | Page changed — re-read final frame |
+| `jitter` | Looks crazy / thrashing — fail visual QA |
+| `unstable` | Unclear — watch longer |
+
+Default after graphs, maps, connection clouds, loaders, or any continuous animation. Do not pass visual QA on thrashing UIs from one freeze-frame.
 
 ## The efficient loop
 
 1. **Locate (once)** — `screen_screenshot()` with no args = full multi-monitor overview. Use it only to find *where* the target is and which monitor. Do not loop on the full composite.
 2. **Ground** — `screen_screenshot(region=[x,y,w,h])` for a crisp zoom, and/or `annotate=true` for numbered Set-of-Marks with click coordinates. Small region shots are fastest and sharpest.
 3. **Act** — `screen_click` / `screen_type` / `screen_key` / `screen_scroll` / `screen_drag`. Default `space=view` uses coordinates as seen in the **latest** screenshot. Prefer `element=<id>` from the last annotated shot so the server resolves exact coords.
-4. **Confirm** — take another screenshot. After an action, capture **auto-settles** (waits for the UI to stop repainting). Read the **`SENSE`** line: new elements, modal opened, or "nothing changed" = no-op/misclick → re-ground and retry.
+4. **Confirm** — simple toggles: one post-shot + **`SENSE`**. Anything that can thrash: **`screen_watch`** (~1 fps × ~6 s). After an action, one-shot capture still **auto-settles**; watch is for *sustained* motion a settle-window will not catch.
 
 ```mermaid
 flowchart LR

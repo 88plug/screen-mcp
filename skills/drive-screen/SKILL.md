@@ -1,19 +1,41 @@
 ---
 name: drive-screen
 description: >-
-  See and operate the user's real, physical Linux desktop through the mcp-screen MCP — screenshot any monitor and click/type/scroll/drag any visible app. Use this whenever the user points at something on their monitor(s), desktop, or an open window and wants you to read it or act on it: "what's on my second/left monitor", "which app is focused and what does it say", "read this dashboard/dialog/popup/terminal that's up", "a box popped up — click cancel", "open Slack and check if X replied", "log into this site in the Firefox window and check a tab", "did the build in that terminal pass", "see if you can read X". Covers reading on-screen GUI content across multiple monitors and driving ANY app (Slack, browser, terminal, settings) by clicking, typing, logging in, or scrolling. Prefer it over app/web APIs (Slack, Grafana, browser tools) when the user is clearly looking at their own screen. NOT for pasted/attached images, local files, shell commands, or remote SSH/TUI sessions. Encodes the fast reliable loop + hard-won gotchas so you don't relearn them.
+  See and operate the user's real, physical Linux desktop through the mcp-screen MCP — screenshot any monitor and click/type/scroll/drag any visible app. Prefer screen_watch (~1 fps) after graphs/maps/canvases/loaders so thrashing UIs are caught like a human watches, not one freeze-frame. Use whenever the user points at something on their monitor(s) or wants you to read/drive a real GUI (Slack, browser, terminal, dashboards). Prefer over app/web APIs when looking at the real screen. NOT for pasted images, local files, shell-only, or remote SSH/TUI. Encodes locate → ground → act → confirm/watch plus hard-won gotchas.
 ---
 
 # Driving the desktop with mcp-screen
 
-A loop, not a single call: **locate → ground → act → confirm**. The tools are `screen_screenshot`, `screen_click`, `screen_type`, `screen_key`, `screen_scroll`, `screen_drag`, `screen_move_mouse`, `screen_read_page`, `screen_do` (batch), `screen_tour`, `screen_wait`, `screen_diag`, `screen_reload`, `screen_session`.
+A loop, not a single call: **locate → ground → act → confirm (watch)**. The tools are `screen_screenshot`, `screen_click`, `screen_type`, `screen_key`, `screen_scroll`, `screen_drag`, `screen_move_mouse`, `screen_read_page`, `screen_do` (batch), `screen_tour`, `screen_wait`, **`screen_watch`**, `screen_diag`, `screen_reload`, `screen_session`.
+
+## Human eyes, not a single glance
+
+screen-mcp is supposed to see like a human. Humans do **not** decide a UI is fine from one freeze-frame — they watch for a beat. A force-directed graph with 500 nodes, a spinning loader, or a canvas thrashing looks "ok" in one shot and **crazy** over 3–6 seconds.
+
+**Default confirm path after anything that can thrash** (graphs, maps, canvases, loaders, animated dashboards, connection clouds):
+
+```text
+screen_watch(region=[…], fps=1, seconds=6)
+```
+
+| Verdict | Meaning | Agent must |
+|---|---|---|
+| `settled` | Quiet at end of window | Safe to act / pass visual QA |
+| `evolving` | Navigation/layout mid-watch | Re-ground on the **final** frame |
+| **`jitter`** | Sustained local motion | **Fail visual QA** — fix the product (cap nodes, freeze sim). Do not report "looks good" |
+| `unstable` | Mixed noise | Watch longer or re-ground |
+
+Do **not** ship or declare a UI fix verified on a single screenshot when the surface is animated. That is how connection clouds "look crazy" slip past agents.
 
 ## The efficient loop
 
 1. **Locate (once):** `screen_screenshot()` with no args = full multi-monitor overview. Use it ONLY to find where the target is and which monitor. It's the slowest shot — don't loop on it.
 2. **Ground:** `screen_screenshot(region=[x,y,w,h])` to zoom in crisp, or add `annotate=true` to get OmniParser-numbered elements with exact `desktop(x,y)` click coords. A small region shot is the fastest and sharpest read.
 3. **Act:** `screen_click`/`screen_type`/etc. Default `space='view'` uses the coords as seen in the **latest** screenshot. To click a grounded element, pass `element=<id>` from the last `annotate=true` (server resolves exact coords — no guessing). **The screenshot is ground truth: whatever is shown at a pixel, a click at that pixel lands there (1:1, verified).** A click that seems to "miss" is almost never the app and never a coordinate offset — it's acting on coords from an *older* screenshot than the one currently in effect (see "Coords belong to ONE screenshot").
-4. **Confirm:** just take another screenshot. After an action the capture **auto-settles** (waits for the UI to stop repainting) so you see the post-action state, never a stale/mid-transition frame; if the action's effect can't be confirmed on an idle/static monitor, it auto-forces ONE fresh frame. Read the `SENSE` line in responses: it tells you what changed, if a modal opened (deal with it first), or "nothing changed" = your action was a no-op/misclick (re-ground and retry). If a *static-monitor* read looks stale (content you expect isn't there), pass `fresh=true` to force a current frame — it nudges the pointer, so it's not on by default.
+4. **Confirm:**
+   - Simple control toggle → one post-shot + `SENSE` line is enough.
+   - **Anything that can thrash → `screen_watch` at ~1 fps (default).** Verdict `jitter` = catch it like a human.
+   - After an action the capture **auto-settles** before a one-shot; if a *static-monitor* read looks stale, `fresh=true`.
 
 ## Speed & accuracy rules (learned the hard way)
 

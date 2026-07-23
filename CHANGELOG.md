@@ -2,6 +2,17 @@
 
 Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
 
+## Unreleased
+
+- **`screen_watch` — human-eye 1 fps observation (default confirm for thrashy UIs).**
+  Samples a region/monitor at `fps` (default 1) for `seconds` (default 6) and
+  returns `settled | evolving | jitter | unstable`. Sustained local motion
+  without navigation → `jitter` (the "looks crazy" case: force-directed graphs,
+  canvas thrash). Drive-screen skill + server `instructions` + docs now make
+  watch the default confirm path after graphs/maps/canvases/loaders — a single
+  screenshot is a glance, not a visual QA pass.
+- Unit tests: `tests/test_watch.py` for verdict classification.
+
 ## 2026.7.24
 
 - 88plug compliance: dual Grok install on docs/install; MkDocs-relative doc links

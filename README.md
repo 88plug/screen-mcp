@@ -20,9 +20,12 @@ Python, CPU-only — built for AI agents that need real computer-use on native
 Linux apps, not just a browser.
 
 It ships the MCP tools plus a `drive-screen` skill that encodes the locate →
-ground → act → confirm loop so the model uses screenshots and clicks well out of
-the box. Developers get productivity tools that reach every visible window —
-including native Wayland apps that `xdotool` and XTEST cannot touch.
+ground → act → **confirm/watch** loop so the model uses screenshots and clicks
+well out of the box. **`screen_watch` (default ~1 fps)** is how agents see like
+humans: thrashing graphs, loaders, and canvases fail visual QA with a `jitter`
+verdict instead of slipping past a single freeze-frame. Developers get
+productivity tools that reach every visible window — including native Wayland
+apps that `xdotool` and XTEST cannot touch.
 
 ## Install
 

@@ -1111,6 +1111,33 @@ TOOLS = [
         },
     },
     {
+        "name": "screen_watch",
+        "title": "Watch (1 fps human-eye)",
+        "annotations": _RO,
+        "description": "Human-eye observation at ~1 fps (default). A single screenshot is a glance — this WATCHES for seconds and reports settled | evolving | jitter | unstable. Use after loaders, canvases, force-directed graphs, maps, or any UI that can thrash so you catch 'looks crazy' the way a human would. Args: region/monitor, fps (default 1), seconds (default 6), annotate (first+last OCR only), shot (final frame, default true), force. Returns timeline + verdict + final screenshot.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "region": _REGION,
+                "monitor": {"type": "number"},
+                "fps": {
+                    "type": "number",
+                    "description": "samples per second (default 1.0, clamp 0.2–10)",
+                },
+                "seconds": {
+                    "type": "number",
+                    "description": "watch window seconds (default 6, clamp 1–60)",
+                },
+                "annotate": {
+                    "type": "boolean",
+                    "description": "OCR/OmniParser on first+last samples only (default false)",
+                },
+                "shot": _SHOT,
+                "force": _FORCE,
+            },
+        },
+    },
+    {
         "name": "screen_session",
         "title": "Record Session",
         "annotations": _ACT,
@@ -1149,36 +1176,28 @@ HANDLERS = {
     "screen_tour": tool_tour,
     "screen_read_page": autoloop.scroll_to_reveal,
     "screen_wait": tool_wait,
+    "screen_watch": autoloop.watch_1fps,
     "screen_session": recorder.tool_session,
     "screen_diag": tool_diag,
 }
 
 INSTRUCTIONS = (
-    "Drive this machine's desktop. Loop: (1) screen_screenshot() overview to locate the target "
-    "(never assume which monitor; the text reports the focused window). (2) screen_screenshot(region=[x,y,w,h]) "
-    "or annotate=true to zoom/ground for crisp reading + accurate clicks. (3) Click/type with space='view' (default) "
-    "using coords as seen in the latest screenshot; add verify=true to catch misclicks, shot=true to see the result, "
-    "or screen_do=[...] to batch. screen_session starts a replayable recording.\n"
-    "FRESH FRAMES: a screenshot taken right after an action auto-settles the UI first (waits for "
-    "repainting to stop) so you always see the post-action state, never a stale/mid-transition frame — "
-    "no need to add your own wait. Pass settle=0 to skip it. A small region screenshot is the fastest, "
-    "crispest read; full-desktop is for locating only.\n"
-    "MONITOR FRAMES: GNOME streams a monitor only on damage, so a monitor that is ON but STATIC "
-    "(idle, no cursor) yields no frame until something changes — mcp-screen auto-nudges the pointer "
-    "to prime it (opt out: MCP_SCREEN_NO_NUDGE=1). A genuinely DPMS/power-saved monitor emits no "
-    "frames at all (expected, not a fault) and you cannot wake it yourself. If a screenshot reports a "
-    "monitor ASLEEP, ask the user to wake it (move the mouse onto it / press a key) and foreground the "
-    "target app, then retry; an ON-but-static note clears once the monitor next changes. Other "
-    "monitors stay capturable.\n"
-    "SELF-LEARNING (read these — they let you adapt without extra calls): responses carry a `SENSE` line "
-    "stating what changed — new elements that appeared, a modal that opened (deal with it first), or "
-    "'nothing changed' meaning your last action was a no-op/misclick (retry/re-ground). The server learns each "
-    "screen it annotates: pass use_cache=true to screen_screenshot(annotate=true) to reuse learned elements on a "
-    "known screen and skip OCR. To read a long/scrollable view, call screen_read_page ONCE instead of looping "
-    "scroll+screenshot. To survey several screens at once, use screen_tour. screen_diag shows what's been learned.\n"
-    "HUMAN OVERSIGHT: the user-takeover guard yields control the instant a human moves the mouse — a STOPPED "
-    "result means the human took over; respect it (re-plan, don't blindly force). This enacts The Agent Oath "
-    "(theagentoath.com) §2 human agency and §11 human oversight: the human stays in control of their own desktop."
+    "Drive this machine's desktop like human eyes + hands.\n"
+    "Loop: (1) screen_screenshot() overview to locate (never assume which monitor). "
+    "(2) region zoom / annotate=true to ground. "
+    "(3) click/type with space='view' from the LATEST shot (pass view_id; or element=<id>). "
+    "(4) CONFIRM — not with one glance only: after loaders, canvases, graphs, maps, animations, "
+    "or any UI that can thrash, call screen_watch (default ~1 fps × 6s). Verdicts: settled | "
+    "evolving | jitter | unstable. jitter means continuous motion a human would call 'crazy' "
+    "(e.g. force-directed graphs with hundreds of nodes) — fix the UI, don't declare pass.\n"
+    "FRESH FRAMES: post-action screenshots auto-settle. Pass settle=0 for instantaneous. "
+    "Region shots are fastest; full-desktop is for locate only.\n"
+    "MONITOR FRAMES: GNOME damage-only streams — ON-but-STATIC needs a nudge; ASLEEP needs the human. "
+    "Opt out of auto-nudge: MCP_SCREEN_NO_NUDGE=1.\n"
+    "SELF-LEARNING: SENSE line on responses; use_cache=true with annotate; screen_read_page for long "
+    "scrollables; screen_tour for multi-state surveys; screen_diag for health.\n"
+    "HUMAN OVERSIGHT: takeover guard yields on human mouse move (STOPPED → re-plan, don't force). "
+    "Agent Oath §2 agency / §11 oversight — human stays in control of their desktop."
 )
 
 

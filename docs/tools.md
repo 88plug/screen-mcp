@@ -43,6 +43,23 @@ Wait until the screen stops changing (or timeout), then optionally screenshot. U
 | `region` / `monitor` | | Scope settle |
 | `shot` | bool | Return screenshot when done |
 
+### `screen_watch` — Watch at 1 fps (human-eye) (RO)
+
+**Default visual confirm for thrashy UIs.** Samples the region/monitor at ~1 fps for several seconds and returns a timeline + verdict (`settled` \| `evolving` \| `jitter` \| `unstable`). Catches continuous animation / force-sim chaos that a single screenshot misses.
+
+| Arg | Type | Notes |
+|---|---|---|
+| `region` / `monitor` | | What to watch (default last view) |
+| `fps` | number | Default **1.0** (clamp 0.2–10) |
+| `seconds` | number | Default **6** (clamp 1–60) |
+| `annotate` | bool | OCR on first+last only (default false) |
+| `shot` | bool | Final frame (default true) |
+| `force` | bool | Bypass takeover guard |
+
+**When:** graphs, maps, canvases, connection clouds, loaders, animated dashboards — or any time a human would stare for a second before saying “looks fine.”
+
+**vs `screen_wait`:** wait returns when *stable once*; watch scores *sustained* motion over a window (jitter = fail visual QA).
+
 ## Pointer & keyboard
 
 ### `screen_move_mouse` — Move Mouse (ACT)
