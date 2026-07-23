@@ -107,3 +107,48 @@ def test_fail_open_on_malformed_input():
     # Missing bbox -> function returns safe defaults instead of raising.
     r = sense.diff_elements([{"role": "x", "label": "y"}], [])
     assert r == {"new": [], "removed": 0, "moved": 0, "changed": []}
+
+
+# --------------------------------------------------------------------------- #
+# to_pixel_signal — the normalizer that feeds os_verify's `pixel` arg
+# --------------------------------------------------------------------------- #
+def test_pixel_signal_empty_is_noop():
+    p = sense.to_pixel_signal(None)
+    assert p["changed"] is False and p["no_op"] is True
+    assert p == sense.to_pixel_signal({})
+
+
+def test_pixel_signal_static_frame_is_noop():
+    p = sense.to_pixel_signal({"settle": {"activity": "none"}})
+    assert p["changed"] is False and p["no_op"] is True and p["activity"] == "none"
+
+
+def test_pixel_signal_activity_means_changed():
+    p = sense.to_pixel_signal({"settle": {"activity": "major"}})
+    assert p["changed"] is True and p["no_op"] is False and p["activity"] == "major"
+
+
+def test_pixel_signal_new_elements_means_opened():
+    p = sense.to_pixel_signal(
+        {"settle": {"activity": "minor"}, "change": {"new_count": 3}}
+    )
+    assert p["opened"] is True and p["changed"] is True
+
+
+def test_pixel_signal_modal_overlay():
+    p = sense.to_pixel_signal(
+        {"settle": {"activity": "major"}, "overlay": {"present": True, "kind": "modal"}}
+    )
+    assert p["modal"] is True and p["changed"] is True
+
+
+def test_pixel_signal_nonmodal_overlay_changes_but_not_modal():
+    p = sense.to_pixel_signal(
+        {"settle": {"activity": "minor"}, "overlay": {"present": True, "kind": "banner"}}
+    )
+    assert p["changed"] is True and p["modal"] is False
+
+
+def test_pixel_signal_scroll_counts_as_changed():
+    p = sense.to_pixel_signal({"scroll": {"dy": 120}})
+    assert p["changed"] is True
