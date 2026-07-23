@@ -405,3 +405,70 @@ def test_clip_paste_returns_false_when_initial_copy_fails_without_attempting_pas
     monkeypatch.setattr(inp, "key", lambda args: key_calls.append(args))
     assert inp._clip_paste("x") is False
     assert key_calls == [], "must not press Ctrl+V if we never wrote the clipboard"
+
+
+# ---------------------------------------------------------------------------
+# type_text routing — real per-char KEYS by default (faithful on every surface,
+# never touches the clipboard); atomic clipboard paste ONLY for non-ASCII (keycodes
+# can't emit it) or when the caller explicitly opts in with paste=True. The per-char
+# inter-key delay (uinput_backend.type_codes, ~12ms) is what guards ordering.
+# ---------------------------------------------------------------------------
+def _stub_key_emitters(monkeypatch):
+    """No-op the portal/uinput emitters so the per-char path runs headless."""
+    monkeypatch.setattr(inp, "_use_uinput", lambda: False)
+    monkeypatch.setattr(inp, "_notify_keycode", lambda *a, **k: None)
+    monkeypatch.setattr(inp, "_notify_keysym", lambda *a, **k: None)
+    monkeypatch.setattr(inp, "GLib", types.SimpleNamespace(usleep=lambda *a, **k: None))
+
+
+def test_type_text_ascii_default_uses_keys_not_clipboard(monkeypatch):
+    # DEFAULT must NOT paste — Ctrl+V is not 'paste' in terminals/vim, so multi-char
+    # ASCII typing has to go through real keystrokes.
+    calls = []
+    monkeypatch.setattr(inp, "_clip_paste", lambda t: calls.append(t) or True)
+    _stub_key_emitters(monkeypatch)
+    inp.type_text({"text": "ls -la /etc"})
+    assert calls == []
+
+
+def test_type_text_short_string_uses_keys(monkeypatch):
+    calls = []
+    monkeypatch.setattr(inp, "_clip_paste", lambda t: calls.append(t) or True)
+    _stub_key_emitters(monkeypatch)
+    inp.type_text({"text": "ab"})
+    assert calls == []
+
+
+def test_type_text_paste_opt_in_uses_clipboard(monkeypatch):
+    calls = []
+    monkeypatch.setattr(inp, "_clip_paste", lambda t: (calls.append(t) or True))
+    # Per-char path must NOT be taken when paste=True succeeds.
+    monkeypatch.setattr(
+        inp, "_use_uinput",
+        lambda: (_ for _ in ()).throw(AssertionError("keys path taken despite paste=True")),
+    )
+    inp.type_text({"text": "claude@resolver.io", "paste": True})
+    assert calls == ["claude@resolver.io"]
+
+
+def test_type_text_non_ascii_uses_clipboard(monkeypatch):
+    # Non-ASCII can't be emitted as keycodes → must paste even without the opt-in.
+    calls = []
+    monkeypatch.setattr(inp, "_clip_paste", lambda t: (calls.append(t) or True))
+    monkeypatch.setattr(
+        inp, "_use_uinput",
+        lambda: (_ for _ in ()).throw(AssertionError("keys path taken for non-ASCII")),
+    )
+    inp.type_text({"text": "café ☕"})
+    assert calls == ["café ☕"]
+
+
+def test_type_text_paste_opt_in_falls_back_to_keys_when_unavailable(monkeypatch):
+    monkeypatch.setattr(inp, "_clip_paste", lambda t: False)  # wl-copy missing / paste failed
+    _stub_key_emitters(monkeypatch)
+    emitted = []
+    monkeypatch.setattr(inp, "_char_to_keycode", lambda ch: (None, False))
+    monkeypatch.setattr(inp, "_char_keysym", lambda ch: emitted.append(ch) or 0)
+    inp.type_text({"text": "hello", "paste": True})
+    # keysym path emits each char twice (press + release); every char in order.
+    assert emitted[::2] == list("hello")

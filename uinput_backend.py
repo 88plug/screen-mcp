@@ -267,7 +267,13 @@ def key_codes(codes):
 
 
 def type_codes(seq):
-    """Type a sequence of (keycode, needs_shift) tuples. Shift is held around shifted chars."""
+    """Type a sequence of (keycode, needs_shift) tuples. Shift is held around shifted chars.
+
+    This is the DEFAULT typing path (faithful on every surface; never touches the clipboard).
+    Inter-key gaps are ~12ms: at 6ms, adjacent keycodes could land in one Mutter dispatch
+    batch and be delivered out of order (observed character reordering on longer strings), the
+    same latch-race key_codes() guards against. Callers wanting atomic entry into a known
+    plain text field can opt into clipboard paste via type_text(paste=True)."""
     dev = ensure_device(*_bounds())
     if dev is None:
         return False
@@ -277,17 +283,17 @@ def type_codes(seq):
             if shift:
                 dev.write(e.EV_KEY, SHIFT, 1)
                 dev.syn()
-                time.sleep(0.004)
+                time.sleep(0.006)
             dev.write(e.EV_KEY, int(kc), 1)
             dev.syn()
-            time.sleep(0.006)
+            time.sleep(0.012)
             dev.write(e.EV_KEY, int(kc), 0)
             dev.syn()
             if shift:
-                time.sleep(0.004)
+                time.sleep(0.006)
                 dev.write(e.EV_KEY, SHIFT, 0)
                 dev.syn()
-            time.sleep(0.006)
+            time.sleep(0.012)
     return True
 
 

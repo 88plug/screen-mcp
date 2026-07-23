@@ -781,15 +781,24 @@ def _clip_paste(text):
 
 def type_text(args):
     text = args["text"]
-    # Unicode (any non-ASCII char) goes via clipboard paste — keycodes/keysyms are ASCII-only.
-    if any(ord(ch) > 0x7F for ch in text) and _clip_paste(text):
+    # DEFAULT: real per-char keystrokes — the only faithful path for EVERY focused
+    # surface (terminals/readline where Ctrl+V is quoted-insert, vim insert mode,
+    # password fields), and it never touches the user's clipboard. Non-ASCII must go
+    # via paste because keycodes/keysyms are ASCII-only. Paste is otherwise OPT-IN
+    # (`paste=True`) — use it only when the target is known to be a plain text field
+    # (browser input, address bar) where the atomic paste avoids the per-char
+    # keycode reorder seen on fast typing into reactive fields; it is NOT safe as a
+    # blanket default (breaks terminals, can't confirm the app consumed the paste,
+    # and exposes secrets to clipboard managers).
+    needs_paste = any(ord(ch) > 0x7F for ch in text)  # unicode: keycodes can't emit it
+    if (needs_paste or args.get("paste")) and _clip_paste(text):
         if args.get("enter"):
             _notify_keycode(28, 1)
             GLib.usleep(8000)
             _notify_keycode(28, 0)
-        return _ok(f"typed {len(text)} chars (unicode via clipboard paste)")
-    # Preferred: kernel-level per-char keycodes via uinput (most reliable; bypasses focus
-    # quirks). Only when every char maps to a keycode; else fall through to the portal path.
+        return _ok(f"typed {len(text)} chars (clipboard)")
+    # Per-char path (default). Kernel-level uinput keycodes first (most reliable;
+    # bypasses focus quirks), else the portal keysym path below.
     if _use_uinput():
         seq = [_char_to_keycode(ch) for ch in text]
         if all(kc is not None for kc, _s in seq):
@@ -837,6 +846,8 @@ def activate_via_overview(name, settle_ms=700):
     try:
         key({"keys": "super"})
         GLib.usleep(settle_ms * 1000)
+        # Per-char keystrokes (the default) — the overview search is a compositor
+        # surface; the focus-recovery path must not depend on clipboard/Ctrl+V.
         type_text({"text": name})
         GLib.usleep(250000)
         key({"keys": "enter"})
