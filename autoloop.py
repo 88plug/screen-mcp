@@ -295,7 +295,7 @@ def watch_1fps(args):
     activities = []
     prev_small = None
     first_img = last_img = None
-    first_ox = first_oy = last_ox = last_oy = 0
+    last_ox = last_oy = 0
     first_els = last_els = None
     stopped = None
 
@@ -318,7 +318,7 @@ def watch_1fps(args):
 
         last_img, last_ox, last_oy = img, ox, oy
         if first_img is None:
-            first_img, first_ox, first_oy = img, ox, oy
+            first_img = img
 
         cur_small = sense.downsample(img)
         act = "none"
