@@ -109,6 +109,99 @@ def test_resolve_xy_stale_view_id_ignored_for_desktop_space():
 
 
 # ---------------------------------------------------------------------------
+# FocusDriftError — regression for the wrong-window-click root cause (2026-07-24):
+# a focus/activate-window call can raise a DIFFERENT window over the same screen
+# region without rebinding the view's scale/origin at all, so the view_id-only
+# StaleViewError guard above never caught it. _do_focus (server.py) sets
+# state.SESSION['focus_changed_since_view'] on every real raise attempt; only a
+# fresh screenshot clears it.
+# ---------------------------------------------------------------------------
+def test_resolve_xy_raises_when_focus_changed_since_view():
+    inp.state.SESSION["view"] = {
+        "ox": 0,
+        "oy": 0,
+        "scale": 1.0,
+        "dw": 100,
+        "dh": 100,
+        "id": 1,
+    }
+    inp.state.SESSION["focus_changed_since_view"] = True
+    with pytest.raises(inp.FocusDriftError):
+        inp.resolve_xy({"x": 10, "y": 10})
+
+
+def test_focus_drift_error_is_a_stale_view_error():
+    # so every existing `except StaleViewError` catch site (server.py's _action pre-check,
+    # tool_do, tool_tour) handles this the same way with no changes needed there.
+    assert issubclass(inp.FocusDriftError, inp.StaleViewError)
+
+
+def test_resolve_xy_focus_drift_flag_ignored_for_desktop_space():
+    # desktop coords are transform-independent, matching the existing view_id exemption.
+    inp.state.SESSION["view"] = {
+        "ox": 0,
+        "oy": 0,
+        "scale": 1.0,
+        "dw": 100,
+        "dh": 100,
+        "id": 1,
+    }
+    inp.state.SESSION["focus_changed_since_view"] = True
+    assert inp.resolve_xy({"x": 10, "y": 10, "space": "desktop"}) == (10, 10)
+
+
+def test_resolve_xy_no_drift_flag_resolves_normally():
+    inp.state.SESSION["view"] = {
+        "ox": 0,
+        "oy": 0,
+        "scale": 1.0,
+        "dw": 100,
+        "dh": 100,
+        "id": 1,
+    }
+    inp.state.SESSION["focus_changed_since_view"] = False
+    assert inp.resolve_xy({"x": 10, "y": 10}) == (10, 10)
+
+
+# ---------------------------------------------------------------------------
+# activate_via_overview — regression for the root-caused bug (2026-07-24): this used to
+# unconditionally `return True` as soon as the Super+type+Enter sequence was sent, with no
+# check that the CORRECT window (vs. another window of the same app) actually got raised.
+# ---------------------------------------------------------------------------
+def test_activate_via_overview_verified_true_on_matching_focused_window(monkeypatch):
+    monkeypatch.setattr(inp, "key", lambda args: None)
+    monkeypatch.setattr(inp, "type_text", lambda args: None)
+    monkeypatch.setattr(
+        inp.awareness, "focused_window", lambda: {"app": "firefox", "title": "LuCI"}
+    )
+    assert inp.activate_via_overview("firefox") == (True, True)
+
+
+def test_activate_via_overview_unverified_when_extension_unavailable(monkeypatch):
+    # The common case tonight: window-info not loaded -> focused_window() can't answer.
+    monkeypatch.setattr(inp, "key", lambda args: None)
+    monkeypatch.setattr(inp, "type_text", lambda args: None)
+    monkeypatch.setattr(inp.awareness, "focused_window", lambda: None)
+    assert inp.activate_via_overview("firefox") == (True, False)
+
+
+def test_activate_via_overview_unverified_on_wrong_window_raised(monkeypatch):
+    # Root-caused scenario: multiple Firefox windows open; the overview search's Enter
+    # raised a DIFFERENT one than requested.
+    monkeypatch.setattr(inp, "key", lambda args: None)
+    monkeypatch.setattr(inp, "type_text", lambda args: None)
+    monkeypatch.setattr(
+        inp.awareness, "focused_window", lambda: {"app": "slack", "title": "general"}
+    )
+    assert inp.activate_via_overview("firefox") == (True, False)
+
+
+def test_activate_via_overview_returns_false_false_without_a_name():
+    assert inp.activate_via_overview("") == (False, False)
+    assert inp.activate_via_overview(None) == (False, False)
+
+
+# ---------------------------------------------------------------------------
 # guard_user (takeover guard)
 # ---------------------------------------------------------------------------
 def test_guard_user_noop_when_never_commanded():

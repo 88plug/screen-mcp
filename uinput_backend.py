@@ -114,22 +114,45 @@ def ensure_device(w, h):
         # NOTE: the ABS range is in NATIVE px. Mutter maps an absolute device across the LOGICAL
         # layout extent — equal to native ONLY when every monitor is scale=1.0 (the case here).
         # Under fractional scaling, native != logical and abs clicks would land off by
-        # x*(1-1/scale); warn so it's diagnosable rather than a silent miss.
-        try:
-            import state as _st
+        # x*(1-1/scale). This used to only reach an internal log file the caller never read, so
+        # click()/move() reported clean "[uinput]" success while known-miscalibrated — see
+        # fractional_scale_warning(), which move()/click() in input.py now surface into the
+        # tool's own returned text.
+        scale_warn = fractional_scale_warning()
+        if scale_warn:
+            try:
+                import state as _st
 
-            if any(
-                (g.get("sx") or 1.0) != 1.0 or (g.get("sy") or 1.0) != 1.0
-                for g in (_st.SESSION.get("geo") or [])
-            ):
-                _st.log(
-                    "WARN uinput: a monitor has fractional scale; abs-click mapping assumes "
-                    "native==logical (scale 1.0) and may be offset. See uinput_backend notes."
-                )
-        except Exception:
-            pass
+                _st.log("WARN uinput: " + scale_warn)
+            except Exception:
+                pass
         time.sleep(0.4)  # let udev/libinput enumerate before the first event
         return _DEV
+
+
+def fractional_scale_warning():
+    """None if every known monitor is scale 1.0; otherwise a short warning string that
+    uinput absolute clicks/moves on a fractionally-scaled monitor may land off-target
+    (native ABS range vs. the compositor's logical layout). Callers (input.py's move/click)
+    append this to their own success text instead of leaving it only in the internal log,
+    so an agent relying on a clean 'clicked ... [uinput]' response is actually told when
+    that response is known-miscalibrated."""
+    try:
+        import state as _st
+
+        bad = [
+            g
+            for g in (_st.SESSION.get("geo") or [])
+            if (g.get("sx") or 1.0) != 1.0 or (g.get("sy") or 1.0) != 1.0
+        ]
+        if bad:
+            return (
+                f"{len(bad)} monitor(s) have fractional scale; uinput abs-click mapping "
+                f"assumes native==logical (scale 1.0) — this click/move may be offset"
+            )
+    except Exception:
+        pass
+    return None
 
 
 def _abs_move(dev, x, y):

@@ -165,14 +165,29 @@ def _maybe_shot(args, content, _t0):
 
 
 def _verify(args, fn):
-    """Optional post-action verify: warn if a click/type produced no on-screen change."""
+    """Optional post-action verify: warn if a click/type produced no on-screen change.
+
+    Handles two shapes: coordinate actions (click/scroll/drag) diff a small region around
+    the point; keyboard-only actions (key/type — which never carry x/y) diff the whole
+    watched node by frame hash instead of silently skipping verification. Root-caused
+    2026-07-24: `screen_key`/`screen_type` never carry x/y, so `resolve_xy(args)` raised
+    a KeyError that the old bare `except Exception: return fn(args)` swallowed — verify=true
+    was a documented safety check that silently did nothing for either tool."""
     if not args.get("verify"):
         return fn(args)
-    try:
-        x, y = inp.resolve_xy(args)
-        node, _, _ = inp.global_to_logical(x, y)
-    except Exception:
-        return fn(args)
+    has_xy = {"x", "y"} <= set(args)
+    node = x = y = None
+    if has_xy:
+        try:
+            x, y = inp.resolve_xy(args)
+            node, _, _ = inp.global_to_logical(x, y)
+        except Exception:
+            has_xy = False
+    if node is None:
+        try:
+            node = _watch_node(args)
+        except Exception:
+            return fn(args)
     try:
         before = capture.grab(node)[2]
     except Exception:
@@ -181,25 +196,31 @@ def _verify(args, fn):
     reliability.wait_for_stable_frame(lambda n: capture.grab(n), node)
     try:
         after = capture.grab(node)[2]
-        m = next((g for g in state.SESSION["geo"] if g["node"] == node), None)
-        if m:
-            lx, ly = x - m["x"], y - m["y"]
-            bb = [max(0, lx - 80), max(0, ly - 80), 160, 160]
-            changed, _ = reliability.region_diff(before, after, bb)
-            if not changed:
-                res["content"].insert(
-                    0,
-                    _txt(
-                        "WARN: no screen change near the click — likely a misclick or focus didn't transfer."
-                    ),
-                )
-                if (
-                    args.get("element") is not None
-                ):  # a cached coord missed -> self-heal THAT state's row
-                    try:
-                        worldmodel.MAP.penalize(state.SESSION.get("elements_state_id"))
-                    except Exception:
-                        pass
+        if has_xy:
+            m = next((g for g in state.SESSION["geo"] if g["node"] == node), None)
+            changed = True  # can't localize without geo -> don't false-warn
+            if m:
+                lx, ly = x - m["x"], y - m["y"]
+                bb = [max(0, lx - 80), max(0, ly - 80), 160, 160]
+                changed, _ = reliability.region_diff(before, after, bb)
+        else:
+            changed = reliability.frame_hash(before) != reliability.frame_hash(after)
+        if not changed:
+            near = " near the click" if has_xy else ""
+            res["content"].insert(
+                0,
+                _txt(
+                    f"WARN: no screen change{near} — likely a misclick, unchanged "
+                    f"content, or focus didn't transfer."
+                ),
+            )
+            if (
+                args.get("element") is not None
+            ):  # a cached coord missed -> self-heal THAT state's row
+                try:
+                    worldmodel.MAP.penalize(state.SESSION.get("elements_state_id"))
+                except Exception:
+                    pass
     except Exception:
         pass
     return res
@@ -340,6 +361,16 @@ def tool_screenshot(args):
         except Exception:
             pass
     content = capture.encode_store(img, ox, oy, label, t0)
+    # This screenshot re-establishes ground truth for whatever window is currently on top —
+    # clear the drift flag any pending focus() call set, so freshly-bound view coords are
+    # trusted again (see resolve_xy's FocusDriftError).
+    state.SESSION["focus_changed_since_view"] = False
+    if args.get("annotate"):
+        # Tag the elements this call (re)populated with the view id this same call just
+        # minted, so a LATER screenshot (annotate or not) — which always mints a new view id
+        # — makes _resolve_element's staleness check detect that cached element coords are
+        # from an older, possibly-superseded frame.
+        state.SESSION["elements_view_id"] = state.SESSION["view"]["id"]
     content.insert(0, _txt("awareness: " + aware))
     asleep = capture.asleep_hint(
         monitor
@@ -425,6 +456,20 @@ def _resolve_element(args):
     eid = args.get("element")
     if eid is None:
         return args
+    # Staleness guard, same idea as resolve_xy's StaleViewError for view_id: elements are
+    # tagged with the view id the annotate=true call that populated them minted. Any LATER
+    # screenshot (annotate=true or not) mints a new view id without touching elements_view_id,
+    # so a mismatch here means the UI may have changed since these coords were captured —
+    # exactly the "clicked element 3, but the layout shifted and element 3 is now something
+    # else" failure mode that had no guard before.
+    view = state.SESSION.get("view") or {}
+    tagged = state.SESSION.get("elements_view_id")
+    if tagged is not None and view.get("id") is not None and tagged != view["id"]:
+        raise inp.StaleViewError(
+            f"element {eid} was captured under an earlier screenshot (view#{tagged}); the "
+            f"current view is view#{view['id']}. Re-screenshot(annotate=true) and use the "
+            f"fresh element ids."
+        )
     el = (state.SESSION.get("elements") or {}).get(int(eid))
     if not el:
         raise RuntimeError(
@@ -478,7 +523,16 @@ def _do_focus(spec):
     """Raise + keyboard-focus a window so injected keys/clicks land in it. `spec` is a window id
     (int/str), an app name (str), or a dict {app?, title?, id?}. Tries the window-info extension's
     ActivateWindow first (exact, fast); falls back to the GNOME overview (type the name) when the
-    extension isn't installed yet. Returns (ok: bool, detail: str). Never raises."""
+    extension isn't installed yet. Returns (ok: bool, detail: str). Never raises.
+
+    Root-caused 2026-07-24: this used to report success as soon as ActivateWindow's D-Bus call
+    (or the overview keystroke sequence) merely completed, with no check that the window it
+    ACTUALLY raised matched the request — with multiple windows of the same app open, that
+    let a wrong-window raise report clean success, and every following click landed on the
+    wrong window/tab. Both paths now verify against awareness.focused_window() before
+    claiming success, and any real raise attempt (verified or not) marks
+    state.SESSION['focus_changed_since_view'] so resolve_xy refuses to click stale
+    screenshot coordinates until a fresh screenshot is taken post-focus (see FocusDriftError)."""
     if isinstance(spec, dict):
         wid, app, title = spec.get("id"), spec.get("app"), spec.get("title")
     elif isinstance(spec, (int, float)) or (
@@ -494,6 +548,22 @@ def _do_focus(spec):
         capture.ensure_geo()
     except Exception:
         pass
+
+    def _matches_request(fw, want_id, want_app, want_title):
+        if not fw:
+            return False
+        if want_id is not None and fw.get("id") is not None:
+            try:
+                return int(fw["id"]) == int(want_id)
+            except (TypeError, ValueError):
+                pass
+        hay = f"{fw.get('app') or ''} {fw.get('wm_class') or ''} {fw.get('title') or ''}".lower()
+        if want_app and want_app.lower() in hay:
+            return True
+        if want_title and want_title.lower() in hay:
+            return True
+        return False
+
     # Extension path (needs the user to have logged out/in once after install).
     try:
         if wid is None and (app or title):
@@ -504,20 +574,42 @@ def _do_focus(spec):
             time.sleep(
                 float(os.environ.get("MCP_SCREEN_FOCUS_SETTLE_MS", "150")) / 1000.0
             )
-            return True, f"focused window id={wid} via extension"
+            state.SESSION["focus_changed_since_view"] = True
+            fw = awareness.focused_window()
+            if fw is None:
+                # Extension can raise but its GetFocusedWindow didn't answer — activate_window's
+                # own boolean is the only confirmation we have; report success but flag it.
+                return True, f"focused window id={wid} via extension (unverified)"
+            if _matches_request(fw, wid, app, title):
+                return True, f"focused window id={wid} via extension (confirmed)"
+            return False, (
+                f"focus MISMATCH: activated window id={wid} but the compositor now reports "
+                f"{fw.get('app') or fw.get('wm_class')!r} / {fw.get('title')!r} focused — "
+                f"re-screenshot to see what's actually on top before clicking"
+            )
     except Exception:
         pass
     # Fallback: overview search by name (no extension required; works today).
     name = app or title or (str(wid) if wid is not None else None)
-    if name and inp.activate_via_overview(name):
-        return True, f"activated '{name}' via overview"
+    if name:
+        issued, verified = inp.activate_via_overview(name)
+        if issued:
+            state.SESSION["focus_changed_since_view"] = True
+            if verified:
+                return True, f"activated '{name}' via overview (confirmed)"
+            return True, (
+                f"activated '{name}' via overview (UNVERIFIED — window-info extension "
+                f"unavailable, and/or multiple windows match '{name}'; re-screenshot before "
+                f"clicking to confirm the right window came forward)"
+            )
     return False, "focus failed: window-info extension not loaded and no name to search"
 
 
 def tool_focus(args):
     """screen_focus handler: focus a window before typing/clicking into it."""
     spec = {"id": args.get("id"), "app": args.get("app"), "title": args.get("title")}
-    ok, detail = _do_focus(spec if (spec["id"] or spec["app"] or spec["title"]) else "")
+    has_target = any(v is not None for v in spec.values())
+    ok, detail = _do_focus(spec if has_target else "")
     return {"content": [_txt(detail)], "isError": not ok}
 
 
@@ -560,11 +652,16 @@ def _action(name, fn, args):
     # background / static-monitor app doesn't have — so `screen_type`/`screen_key` silently land
     # in the wrong window. Pass focus={app|title|id} (or focus="slack") on any action to raise +
     # keyboard-focus the target first. Opt-in; never steals focus unless asked.
+    # A focus failure/mismatch must BLOCK the action rather than be silently discarded — the
+    # old bare `except Exception: pass` here swallowed _do_focus's (ok, detail) return, so a
+    # reported focus failure never stopped the click/type that followed (root cause of several
+    # wrong-window clicks tonight). Any successful raise attempt also marks
+    # focus_changed_since_view, so resolve_xy below will refuse this same call's own stale
+    # (x,y) if the caller aimed at a screenshot taken before this focus.
     if args.get("focus") is not None:
-        try:
-            _do_focus(args["focus"])
-        except Exception:
-            pass
+        fok, fdetail = _do_focus(args["focus"])
+        if not fok:
+            return {"content": [_txt(f"FOCUS FAILED: {fdetail}")], "isError": True}
     # Populate focused-app context (read-only; degrades silently when awareness is down).
     if "_focused_app" not in args:
         try:
@@ -756,6 +853,16 @@ def tool_tour(args):
                 continue
             try:
                 step = _resolve_element(step)
+                focus_spec = step.pop("focus", None)
+                if focus_spec is not None:
+                    # screen_tour never actually applied per-step focus before — it was
+                    # documented (see the `focus` field on the batched action tools) but the
+                    # loop here never read it, so a tour step's click fired against whatever
+                    # window the compositor happened to have focused.
+                    fok, fdetail = _do_focus(focus_spec)
+                    if not fok:
+                        errs.append(f"{label}: FOCUS FAILED: {fdetail}")
+                        continue
                 inp.guard_user(step.get("force", force))
                 fn(step)
             except inp.UserControlError as e:
@@ -828,10 +935,16 @@ def tool_do(args):
             if (
                 step.get("focus") is not None
             ):  # per-step pre-focus (batch bypasses _action)
-                try:
-                    _do_focus(step["focus"])
-                except Exception:
-                    pass
+                # Must actually check the result — the old bare except-pass here let a
+                # failed/mismatched focus silently fall through to the click anyway,
+                # letting a multi-step batch click through several wrong windows with
+                # zero error surfaced.
+                fok, fdetail = _do_focus(step["focus"])
+                if not fok:
+                    out.append(f"[{i}] FOCUS FAILED: {fdetail}")
+                    if stop_on_error:
+                        return {"content": [_txt("\n".join(out))], "isError": True}
+                    continue
             step.pop("shot", None)
             r = _verify(step, fn)
             out.append(f"[{i}] {r['content'][0]['text']}")
