@@ -61,7 +61,19 @@ def check_gstreamer():
         gi.require_version("Gst", "1.0")
         from gi.repository import Gst
 
-        Gst.init(None)
+        # Gst.init is binding-version-fragile: older PyGObject accepts None,
+        # GStreamer/GI >= 1.28 rejects it ("Argument 1 does not allow None as a
+        # value") and wants a list, and other builds raise different errors.
+        # Try both forms and fall through on failure — Gst.version() below does
+        # NOT require a successful init, and capture.py runs its own init anyway.
+        # So the version gate, not the init call, decides usability. Durable
+        # across every binding: never false-fail on the init step.
+        for _argv in (None, []):
+            try:
+                Gst.init(_argv)
+                break
+            except Exception:
+                continue
         major, minor, *_ = Gst.version()
         detail = f"GStreamer {major}.{minor}"
         if (major, minor) < (1, 28):

@@ -40,13 +40,18 @@ import state  # noqa: E402
 
 LANCZOS = Image.Resampling.LANCZOS
 
-# Gst.init: older PyGObject accepts None; GStreamer/gobject-introspection >= 1.28
-# rejects it ("Argument 1 does not allow None as a value") and requires a list.
-# Try both so the server starts on every binding version.
-try:
-    Gst.init(None)
-except TypeError:
-    Gst.init([])
+# Gst.init is binding-version-fragile: older PyGObject accepts None; GStreamer/
+# gobject-introspection >= 1.28 rejects it ("Argument 1 does not allow None as a
+# value") and requires a list; other builds raise different errors. Try both and
+# fall through so the server starts on EVERY version — a genuine GStreamer
+# failure then surfaces at pipeline creation with an actionable error, instead of
+# crashing import on a binding quirk.
+for _gst_argv in (None, []):
+    try:
+        Gst.init(_gst_argv)
+        break
+    except Exception:
+        continue
 
 # node_id -> {"pipe": Gst.Pipeline, "sink": appsink}. Guarded by _LOCK.
 _PIPES = {}
