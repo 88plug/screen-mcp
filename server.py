@@ -895,6 +895,7 @@ _RO = {"readOnlyHint": True, "destructiveHint": False}
 _ACT = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False}
 _DEST = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False}
 
+
 def tool_sense(a):
     """Return the normalized cross-layer pixel signal from the most recent frame diff —
     {changed, opened, modal, no_op, activity} — for feeding a verifier's `pixel` arg
@@ -1179,7 +1180,7 @@ TOOLS = [
     },
     {
         "name": "screen_sense",
-        "title": "Cross-layer Pixel Signal",
+        "title": "Cross-Layer Pixel Signal",
         "annotations": _RO,
         "description": "Return the normalized change signal from the most recent frame diff — {changed, opened, modal, no_op, activity} — so a verifier can fuse the GUI layer with the OS layer. Call right after a screen action, then pass the `pixel` object to os-control-mcp's os_verify (action=end, pixel=...). This is the pixel half of cross-layer action verification: it lets the agent catch a GUI that changed while the underlying service did not (or vice-versa). Read-only.",
         "inputSchema": {"type": "object", "properties": {}},
