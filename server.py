@@ -89,6 +89,8 @@ def _sense_block(raw_img, elements_list, post_action=False):
         view = state.SESSION.get("view")
         sig = sense.compute(raw_img, view, elements_list)
         sense.stash(raw_img, view, elements_list)
+        # Publish the normalized cross-layer signal for screen_sense / os_verify.
+        state.SESSION["last_pixel"] = sense.to_pixel_signal(sig)
     except Exception:
         return None
     parts = []
@@ -893,6 +895,21 @@ _RO = {"readOnlyHint": True, "destructiveHint": False}
 _ACT = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False}
 _DEST = {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False}
 
+
+def tool_sense(a):
+    """Return the normalized cross-layer pixel signal from the most recent frame diff —
+    {changed, opened, modal, no_op, activity} — for feeding a verifier's `pixel` arg
+    (e.g. os-control-mcp's os_verify). Read-only; reflects the last action's SENSE."""
+    px = state.SESSION.get("last_pixel") or {
+        "changed": False,
+        "opened": False,
+        "modal": False,
+        "no_op": True,
+        "activity": "none",
+    }
+    return [_txt(json.dumps({"pixel": px}))]
+
+
 TOOLS = [
     {
         "name": "screen_screenshot",
@@ -1161,6 +1178,13 @@ TOOLS = [
         "description": "Health dump: prereqs matrix (portal, window-info, uinput, gstreamer, …) with next_step hints, plus session/geo, cursor/guard state, grounding backends. Use first when capture, clicks, or the cursor guard misbehave. Returns the full capability/session report.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "screen_sense",
+        "title": "Cross-Layer Pixel Signal",
+        "annotations": _RO,
+        "description": "Return the normalized change signal from the most recent frame diff — {changed, opened, modal, no_op, activity} — so a verifier can fuse the GUI layer with the OS layer. Call right after a screen action, then pass the `pixel` object to os-control-mcp's os_verify (action=end, pixel=...). This is the pixel half of cross-layer action verification: it lets the agent catch a GUI that changed while the underlying service did not (or vice-versa). Read-only.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 HANDLERS = {
     "screen_screenshot": tool_screenshot,
@@ -1179,6 +1203,7 @@ HANDLERS = {
     "screen_watch": autoloop.watch_1fps,
     "screen_session": recorder.tool_session,
     "screen_diag": tool_diag,
+    "screen_sense": tool_sense,
 }
 
 INSTRUCTIONS = (

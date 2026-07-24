@@ -327,6 +327,33 @@ def stash(img_arr, view, elements):
         pass
 
 
+def to_pixel_signal(sig):
+    """Normalize the rich SENSE dict into the compact cross-layer contract a verifier
+    consumes (os-control-mcp's `os_verify` `pixel` arg): {changed, opened, modal, no_op,
+    activity}. `changed` is the one field the fusion needs — did the screen move — with
+    the rest as detail. Pure + fail-open: an empty/None sig reads as a no-op."""
+    sig = sig or {}
+    settle = sig.get("settle") or {}
+    activity = settle.get("activity")
+    change = sig.get("change") or {}
+    overlay = sig.get("overlay") or {}
+    opened = bool(change.get("new_count"))
+    modal = bool(overlay.get("present")) and overlay.get("kind") == "modal"
+    changed = bool(
+        activity not in (None, "none")
+        or opened
+        or overlay.get("present")
+        or sig.get("scroll")
+    )
+    return {
+        "changed": changed,
+        "opened": opened,
+        "modal": modal,
+        "no_op": not changed,
+        "activity": activity or "none",
+    }
+
+
 def compute(img_arr, view, elements=None, scrolled=False):
     """Assemble the ambient SENSE signal dict by diffing against the stored prior frame.
 

@@ -127,6 +127,7 @@ annotated shot.
 | `screen_session` | Recorder: `start` / `stop` / `list` / `status` / `replay-path`. |
 | `screen_reload` | Hot-reload the server in place after edits. |
 | `screen_diag` | Health dump: session, cursor, grounding backends, world-model stats. |
+| `screen_sense` | Normalized cross-layer change signal from the last frame diff (`{changed, opened, modal, no_op, activity}`) — pass the `pixel` object to os-control-mcp's `os_verify` to catch a GUI that changed while the service did not. |
 
 ## Requirements
 

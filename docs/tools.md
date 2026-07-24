@@ -189,6 +189,10 @@ Hot-reload this MCP server's own code in place (re-exec, preserving the connecti
 
 Health dump: prereqs matrix (portal, window-info, uinput, GStreamer, …) with `next_step` hints; session/geo; cursor/guard state; grounding backends. **First tool to call** when capture, clicks, or the cursor guard misbehave.
 
+### `screen_sense` — Cross-Layer Pixel Signal (RO)
+
+Return the normalized change signal from the most recent frame diff — `{changed, opened, modal, no_op, activity}` — so a verifier (os-control-mcp's `os_verify`) can fuse the GUI layer with the OS layer. Call right after a screen action, then pass the `pixel` object to `os_verify` (`action=end`). Catches a GUI that changed while the underlying service did not.
+
 ## Tool inventory (quick table)
 
 | Tool | Title | Hint |
@@ -206,8 +210,10 @@ Health dump: prereqs matrix (portal, window-info, uinput, GStreamer, …) with `
 | `screen_read_page` | Read Page | ACT |
 | `screen_tour` | Tour UI States | DEST |
 | `screen_wait` | Wait for Settle | RO |
+| `screen_watch` | Watch (1 fps human-eye) | RO |
 | `screen_session` | Record Session | ACT |
 | `screen_reload` | Reload Server | DEST |
 | `screen_diag` | Diagnostics | RO |
+| `screen_sense` | Cross-Layer Pixel Signal | RO |
 
-Sixteen tools. If this page and a live `tools/list` disagree, trust the running server and open an issue.
+Eighteen tools. If this page and a live `tools/list` disagree, trust the running server and open an issue.

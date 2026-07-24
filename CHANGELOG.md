@@ -12,6 +12,12 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   watch the default confirm path after graphs/maps/canvases/loaders — a single
   screenshot is a glance, not a visual QA pass.
 - Unit tests: `tests/test_watch.py` for verdict classification.
+- **`screen_sense` + `sense.to_pixel_signal()` — the pixel half of cross-layer
+  verification.** Normalizes the rich SENSE dict into the compact
+  `{changed, opened, modal, no_op, activity}` contract and exposes it as a
+  read-only tool, so an agent can hand the `pixel` object to os-control-mcp's
+  `os_verify` and catch a GUI that changed while the underlying service did not.
+  7 new `to_pixel_signal` unit tests.
 
 ## 2026.7.24
 
