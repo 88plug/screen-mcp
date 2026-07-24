@@ -4,6 +4,31 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
 
 ## Unreleased
 
+- **Focus verification — root-cause fix for clicks landing on the wrong window/tab.**
+  `screen_focus`/`focus=` no longer report success without confirming the correct
+  window actually got raised: both the window-info-extension path (`activate_window`)
+  and the no-extension GNOME Overview fallback (`activate_via_overview`) now check
+  `awareness.focused_window()` before claiming success, instead of trusting a bare
+  boolean or "the keystrokes were sent." Any real focus/activation attempt now also
+  marks the current view stale — `resolve_xy` raises a new `FocusDriftError`
+  (a `StaleViewError` subclass) rather than silently clicking screenshot coordinates
+  that may no longer match what's on top, until a fresh screenshot is taken.
+  `_action`, `screen_do`, and `screen_tour` now all check and act on a focus
+  failure instead of discarding it (`screen_tour` previously never applied
+  per-step `focus` at all — a complete no-op).
+- Element-id staleness guard: `element=<id>` (from an annotated screenshot) now
+  raises the same class of stale error when a later screenshot has superseded the
+  cached elements, instead of silently resolving to a renumbered/wrong element.
+- `verify=true` on `screen_key`/`screen_type` now actually performs a whole-frame
+  diff instead of silently no-op'ing — it previously only worked for
+  coordinate-bearing tools (click/scroll/drag).
+- uinput's fractional-scale miscalibration warning now surfaces into
+  `screen_click`/`move`/`scroll`/`drag`'s own returned text instead of sitting
+  only in an internal log file the caller never reads.
+- Removed `reliability.wrap_call` — fully dead code (zero call sites); its
+  ack-gate/hash/diff primitives are already composed directly by server.py's
+  `_action`/`_verify`.
+- 8 new regression tests (`tests/test_input.py`) covering the above.
 - **`screen_watch` — human-eye 1 fps observation (default confirm for thrashy UIs).**
   Samples a region/monitor at `fps` (default 1) for `seconds` (default 6) and
   returns `settled | evolving | jitter | unstable`. Sustained local motion

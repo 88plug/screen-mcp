@@ -19,6 +19,7 @@ import subprocess
 from typing import Any, cast
 
 import state
+import awareness
 import uinput_backend as ui  # kernel-level absolute-pointer path (preferred when available)
 
 
@@ -75,6 +76,16 @@ class StaleViewError(RuntimeError):
     """Raised when a view-space click carries a view_id that an intervening screenshot has
     superseded — the coords would map through the wrong transform. Tells the caller to
     re-screenshot rather than click blind."""
+
+
+class FocusDriftError(StaleViewError):
+    """Raised when a focus/window-activation happened after the bound view was captured.
+    Root-caused 2026-07-24: raising a window (extension ActivateWindow, or the no-extension
+    overview-search fallback) can silently change which window sits at the screenshot's
+    coordinates — clicking those coordinates then lands on whatever the focus call raised,
+    not the window that was actually screenshotted. A subclass of StaleViewError so every
+    existing `except StaleViewError` catch site handles this the same way, with no changes
+    needed there."""
 
 
 def guard_user(force=False):
@@ -297,6 +308,20 @@ def resolve_xy(args):
                 f"view#{v['id']} (a later screenshot rebound the transform). Re-screenshot "
                 f"and click with the fresh view's coords + view_id."
             )
+        # Window-stacking-drift guard: a focus/activate-window call (screen_focus, or a
+        # focus= kwarg on this same action) can raise a DIFFERENT window over the same
+        # screen region without changing the view's scale/origin at all — the check above
+        # only catches a REBOUND transform, not a reshuffled window stack under an
+        # unchanged one. _do_focus flips this flag on every raise attempt; only a fresh
+        # screenshot (which re-establishes ground truth for whatever is now on top) clears
+        # it. Root-caused 2026-07-24: this is exactly why clicks landed on the wrong
+        # browser window/tab during live use.
+        if v and state.SESSION.get("focus_changed_since_view"):
+            raise FocusDriftError(
+                "a window focus/activation happened after this screenshot was taken — "
+                "the window under these coordinates may no longer be the one you saw. "
+                "Re-screenshot after focusing, then click the fresh coordinates."
+            )
 
     if space == "desktop":
         return int(round(x)), int(round(y))
@@ -359,6 +384,17 @@ def _ok(text):
     return {"content": [{"type": "text", "text": text}]}
 
 
+def _ok_uinput(text):
+    """Like _ok, but appends uinput's fractional-scale miscalibration warning (if any) into
+    the visible response instead of leaving it only in the internal log — a caller trusting
+    a clean '[uinput]' success string used to have no way to know the click/move might be
+    off-target on a fractionally-scaled monitor."""
+    warn = ui.fractional_scale_warning()
+    if warn:
+        text = f"{text} — WARN: {warn}"
+    return _ok(text)
+
+
 # ---------------------------------------------------------------------------
 # Public tool entry points
 # ---------------------------------------------------------------------------
@@ -367,7 +403,7 @@ def move(args):
     if _use_uinput() and ui.move(Gx, Gy):
         _set_cmd(Gx, Gy)
         _stamp_input()
-        return _ok(f"moved to desktop ({Gx},{Gy}) [uinput]")
+        return _ok_uinput(f"moved to desktop ({Gx},{Gy}) [uinput]")
     _goto(Gx, Gy)
     return _ok(f"moved to desktop ({Gx},{Gy})")
 
@@ -388,7 +424,7 @@ def click(args):
             if have_xy:
                 _set_cmd(Gx, Gy)
             _stamp_input()
-            return _ok(
+            return _ok_uinput(
                 f"clicked {button} {('(' + str(Gx) + ',' + str(Gy) + ')') if have_xy else '(in place)'} [uinput]"
             )
     # Fallback: portal path.
@@ -434,7 +470,7 @@ def scroll(args):
         if ui.scroll(Gx, Gy, dy_notches=dy, dx_notches=dx, at=True):
             _set_cmd(Gx, Gy)
             _stamp_input()  # ui.scroll repositions the pointer to (Gx,Gy)
-            return _ok(f"scrolled {direction} x{amount} [uinput hi-res]")
+            return _ok_uinput(f"scrolled {direction} x{amount} [uinput hi-res]")
     # Fallback: portal smooth pixel axis.
     _goto(Gx, Gy)
     GLib.usleep(20000)
@@ -460,7 +496,7 @@ def drag(args):
     if _use_uinput() and ui.drag(x1, y1, x2, y2, button=args.get("button", "left")):
         _set_cmd(x2, y2)
         _stamp_input()
-        return _ok(f"dragged ({x1},{y1})->({x2},{y2}) [uinput]")
+        return _ok_uinput(f"dragged ({x1},{y1})->({x2},{y2}) [uinput]")
     btn = BTN.get(args.get("button", "left"), 0x110)
     _goto(x1, y1)
     GLib.usleep(20000)
@@ -838,11 +874,25 @@ def activate_via_overview(name, settle_ms=700):
     """Fallback window activation with NO gnome-shell extension: open the GNOME overview (Super),
     type the app/window name into its search, Enter to focus/launch the match. Uses the same
     compositor-level keycode path as our keyboard tools — which lands reliably even on a static
-    monitor (compositor shortcuts aren't routed to an app surface). Best-effort; returns True if
-    the sequence was issued. This is the only focus lever before the extension is installed +
-    the user has logged out/in once."""
+    monitor (compositor shortcuts aren't routed to an app surface). This is the only focus lever
+    before the extension is installed + the user has logged out/in once.
+
+    Returns (issued, verified):
+      issued   True once the Super+type+Enter sequence was actually sent (False only on a
+               local exception, e.g. no `name`).
+      verified True only if awareness.focused_window() came back AND its app/wm_class/title
+               matches `name` — i.e. we have positive confirmation the RIGHT window was
+               raised. False means either the extension is unavailable (can't check at all,
+               the common case tonight) OR it IS available and reports a DIFFERENT window is
+               focused (overview search picked the wrong match among several same-named
+               windows) — either way, the caller must not treat this as a confirmed focus.
+
+    Root-caused 2026-07-24: this used to unconditionally `return True` as soon as the
+    keystrokes were sent, with zero check that the correct window (vs. another window of the
+    same app — e.g. multiple Firefox windows) actually ended up focused. That produced
+    real, repeated wrong-window clicks during live use."""
     if not name:
-        return False
+        return False, False
     try:
         key({"keys": "super"})
         GLib.usleep(settle_ms * 1000)
@@ -852,6 +902,15 @@ def activate_via_overview(name, settle_ms=700):
         GLib.usleep(250000)
         key({"keys": "enter"})
         GLib.usleep(200000)
-        return True
     except Exception:
-        return False
+        return False, False
+    verified = False
+    try:
+        fw = awareness.focused_window()
+        if fw:
+            nl = name.lower()
+            hay = f"{fw.get('app') or ''} {fw.get('wm_class') or ''} {fw.get('title') or ''}".lower()
+            verified = nl in hay
+    except Exception:
+        verified = False
+    return True, verified
