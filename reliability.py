@@ -275,5 +275,3 @@ def needs_ack(tool, args, ocr_near_target):
             return f"keyword:{m.group(1).lower()}"
 
     return None
-
-
