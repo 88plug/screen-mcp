@@ -15,6 +15,16 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **`screen_read_selection` waits for the clipboard instead of guessing 140ms.** It slept a
+  fixed `GLib.usleep(140000)` after sending the copy combo, then read. That was wrong in both
+  directions: it charged every fast app the full delay, and any app slower than it read back
+  EMPTY — which, since we clear the clipboard first, is indistinguishable from "nothing was
+  copied" and surfaced as a false negative. Now polls at 15ms until non-empty or
+  `MCP_SCREEN_SELECTION_TIMEOUT_S` (default 1.5s). Clearing first is what makes polling sound:
+  non-empty can only mean this copy landed. Verified live — the terminal under test took
+  ~1.3s to publish the selection, i.e. the old fixed sleep would have failed it.
+  (Steal from QuickDesk's `wait_for_clipboard_change`.)
+
 - **Encode re-swept and left alone — it is already at the floor (negative result).**
   With the shipped `m=0 q=20` at 202ms median (9 reps) on the current RGB/INTER_AREA output,
   nothing beats it: higher lossless effort is 237-251ms, `method=1` is 344-613ms, PNG is

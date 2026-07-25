@@ -66,6 +66,10 @@ GUARD_THRESH = int(os.environ.get("MCP_SCREEN_GUARD_PX", "40"))
 # STOPPED errors reporting the IDENTICAL "live" position across many unrelated clicks.
 GUARD_STALE_S = float(os.environ.get("MCP_SCREEN_GUARD_STALE_S", "3.0"))
 
+# How long read_selection waits for the app to put a selection on the clipboard. Polled, not
+# slept: a fixed delay overcharges every fast app and false-negatives every slow one.
+SELECTION_TIMEOUT_S = float(os.environ.get("MCP_SCREEN_SELECTION_TIMEOUT_S", "1.5"))
+
 
 class UserControlError(RuntimeError):
     """Raised when the live pointer has drifted off where we last commanded it — the user
@@ -844,9 +848,22 @@ def read_selection(a):
             key({"keys": "ctrl+a"})
             GLib.usleep(60000)
         key({"keys": combo})
-        GLib.usleep(140000)  # let the app put it on the clipboard before we read
-        r = subprocess.run(["wl-paste", "--no-newline"], capture_output=True, timeout=2)
-        got = r.stdout.decode("utf-8", "replace") if r.returncode == 0 else ""
+        # WAIT for the clipboard to actually fill, don't guess how long the app needs.
+        # A fixed sleep here was wrong in both directions: it charged every fast app the
+        # full delay, and any app slower than it read back EMPTY — which, now that we clear
+        # first, is indistinguishable from "nothing was copied" and gets reported as a
+        # false negative. Clearing first is what makes polling sound: non-empty can only
+        # mean this copy landed.
+        got = ""
+        deadline = time.monotonic() + SELECTION_TIMEOUT_S
+        while True:
+            r = subprocess.run(
+                ["wl-paste", "--no-newline"], capture_output=True, timeout=2
+            )
+            got = r.stdout.decode("utf-8", "replace") if r.returncode == 0 else ""
+            if got.strip() or time.monotonic() >= deadline:
+                break
+            GLib.usleep(15000)
     except Exception as ex:  # noqa: BLE001 — fail-open like the rest of the input path
         return _ok(f"clipboard read failed: {ex}")
     finally:
