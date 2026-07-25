@@ -1119,6 +1119,33 @@ def asleep_hint(monitor=None):
     )
 
 
+def validate_scope(geo, W, H, region=None, monitor=None):
+    """Raise if a monitor index or region cannot name real pixels. Pure, so it is testable
+    without a portal session.
+
+    An unvalidated scope did not fail loudly — it silently produced a crop that every
+    caller then read as legitimate: screen_read_text answered `count:0` (indistinguishable
+    from "the region exists and is empty") and screen_verify answered CONFIRMED/changed
+    for a region that does not exist, i.e. it certified an action against nothing. Found
+    by an adversarial-args probe, not by the suite."""
+    if monitor is not None:
+        mi = int(monitor)
+        if not (0 <= mi < len(geo)):
+            raise RuntimeError(
+                f"monitor {mi} does not exist — this desktop has {len(geo)} "
+                f"(valid: 0..{len(geo) - 1}). Call screen_list_monitors."
+            )
+    if region:
+        rx, ry, rw, rh = [int(v) for v in region]
+        if rw <= 0 or rh <= 0:
+            raise RuntimeError(f"region {region} has non-positive width/height")
+        if W and H and (rx >= W or ry >= H or rx + rw <= 0 or ry + rh <= 0):
+            raise RuntimeError(
+                f"region {region} lies entirely outside the desktop (0,0,{W},{H}) — "
+                f"nothing there to capture. Call screen_list_monitors for the bounds."
+            )
+
+
 def capture_desktop(region=None, monitor=None, fresh=False):
     """Return (PIL RGB at real desktop pixels, origin_x, origin_y).
 
@@ -1155,6 +1182,9 @@ def capture_desktop(region=None, monitor=None, fresh=False):
             region = json.loads(region)
         except Exception:
             region = None
+    validate_scope(
+        geo, state.SESSION.get("W") or 0, state.SESSION.get("H") or 0, region, monitor
+    )
     if monitor is not None:
         m = geo[int(monitor)]
         try:
@@ -1174,6 +1204,11 @@ def capture_desktop(region=None, monitor=None, fresh=False):
     if region:
         rx, ry, rw, rh = [int(v) for v in region]
         mons = monitors_for([rx, ry, rw, rh])
+        if not mons:
+            raise RuntimeError(
+                f"region {region} does not intersect any monitor. "
+                f"Call screen_list_monitors for the bounds."
+            )
         if len(mons) == 1:
             m = mons[0]
             try:

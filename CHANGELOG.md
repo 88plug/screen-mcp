@@ -15,6 +15,32 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **Adversarial-args probe: three defects, one root cause, fixed at the source.**
+  A read-only sweep of hostile inputs found that `capture_desktop` validated nothing:
+  `monitor=99` leaked a raw `list index out of range`, an entirely off-screen region
+  returned a crop that `screen_read_text` reported as `count:0` (indistinguishable from
+  "the region exists and is empty"), and — worst — `screen_verify` graded that same
+  nonexistent region **CONFIRMED / changed:true**, certifying an action against pixels
+  that do not exist. Fixed once in a pure `capture.validate_scope()` so all three tools
+  inherit it, with the error naming the valid range. Mutation-checked: disabling the
+  off-screen guard fails the suite.
+
+- **`screen_do` failed on the first call after a reload.** It deliberately bypasses
+  `_action`, which is what normally primes monitor geometry, so `SESSION["geo"]` was still
+  None and the first pointer step died with a bare `TypeError: 'NoneType' object is not
+  iterable`. Same shape as the documented focus-after-reload bug. `tool_do` now primes geo
+  once, and `global_to_logical` raises an actionable error instead of a TypeError. Found by
+  a cold-start probe — earlier `screen_do` calls only worked because a screenshot had
+  already primed geo.
+
+- **`_maybe_shot` waits for the frame to change instead of sleeping a flat 350ms.**
+  `settle` is now a CEILING, not a cost. The blind sleep was wrong in both directions —
+  it charged every fast action the full delay and still grabbed a pre-change frame when the
+  UI was slower. This is also the only place `MCP_SCREEN_WAIT_MODE=hybrid` can matter for
+  an agent: the change-gate in `tool_screenshot` requires a screenshot within 1.5s of an
+  action, which separate tool calls from a model never are. Third instance of the same
+  defect class this session (see also the clipboard wait).
+
 - **Cross-layer verification proven end-to-end with os-control-mcp's `os_verify`.**
   `screen_verify`'s `pixel` block is exactly the contract `os_verify` consumes, so the two
   compose with no code changes — confirmed by running both quadrants against the live

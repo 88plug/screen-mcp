@@ -264,6 +264,12 @@ def global_to_logical(Gx, Gy):
     native origin divided by scale."""
     geo = state.SESSION["geo"]
     m = None
+    if not geo:
+        raise RuntimeError(
+            "no monitor geometry yet — nothing has probed the desktop in this session. "
+            "Take a screenshot (or call screen_list_monitors) first; batch tools must "
+            "prime geo before injecting input."
+        )
     for cand in geo:
         if (
             cand["x"] <= Gx < cand["x"] + cand["w"]

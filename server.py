@@ -132,7 +132,39 @@ def _maybe_shot(args, content, _t0):
         return content
     settle = min(MAX_WAIT_MS, float(args.get("settle", 350))) / 1000.0
     if settle > 0:
-        time.sleep(settle)
+        # WAIT for the frame to change, don't sleep a flat 350ms. The blind sleep was wrong
+        # in both directions — it charged every fast action the full delay and still grabbed
+        # a pre-change frame when the UI was slower. `settle` is now the CEILING, not the
+        # cost. Same fix already applied to read_selection's clipboard wait. This is also
+        # the only place MCP_SCREEN_WAIT_MODE=hybrid can matter for an agent: the
+        # change-gate in tool_screenshot needs a screenshot within 1.5s of an action, which
+        # separate tool calls never are.
+        base = state.SESSION.get("last_input_hash")
+        node = state.SESSION.get("last_input_node")
+        waited = False
+        if base is not None and node is not None:
+            try:
+                armed = {"ev": capture.arm_damage(node)}
+
+                def _wd(budget, _n=node, _a=armed):
+                    ok = capture.wait_damage(_a["ev"], budget)
+                    _a["ev"] = capture.arm_damage(_n)
+                    return ok
+
+                reliability.wait_for_changed_frame(
+                    lambda n: capture.grab(n),
+                    node,
+                    base,
+                    timeout=settle,
+                    mode=capture.WAIT_MODE,
+                    wait_fn=_wd,
+                    note_fn=capture.note_wake,
+                )
+                waited = True
+            except Exception:
+                waited = False
+        if not waited:
+            time.sleep(settle)
     region = args.get("region")
     monitor = args.get("monitor")
     if region is None and monitor is None and state.SESSION.get("view"):
@@ -1275,6 +1307,14 @@ def tool_tour(args):
 
 def tool_do(args):
     """Batched ordered actions: steps=[{action, ...args}]. One optional final screenshot."""
+    # screen_do deliberately bypasses _action, which is what normally primes geometry —
+    # so on the FIRST call after a reload SESSION["geo"] was still None and the first
+    # pointer step died with a bare TypeError from global_to_logical. Same shape as the
+    # documented focus-after-reload bug. Prime once, here.
+    try:
+        capture.ensure_geo()
+    except Exception:
+        pass
     steps = args.get("steps", [])
     stop_on_error = args.get("stop_on_error", True)
     force = args.get("force")

@@ -137,6 +137,13 @@ def _server():
     return server
 
 
+def _capture():
+    pytest.importorskip("gi")
+    import capture
+
+    return capture
+
+
 def test_text_match_is_the_real_function_not_a_copy():
     """This test previously RE-IMPLEMENTED _text_match instead of importing it, so it
     could not fail when the shipped function broke — the vacuous-test failure mode.
@@ -181,3 +188,48 @@ def test_every_declared_tool_has_a_handler_and_annotations():
         assert t.get("title"), t["name"]
         assert t.get("annotations"), t["name"]
         assert "Returns" in t["description"] or "returns" in t["description"], t["name"]
+
+
+# --- scope validation: an unvalidated region certified actions against nothing ---
+
+GEO2 = [{"node": 1}, {"node": 2}]
+DESK = (7680, 2160)
+
+
+def _vs(**kw):
+    return _capture().validate_scope(GEO2, *DESK, **kw)
+
+
+def test_monitor_index_out_of_range_names_the_valid_range():
+    with pytest.raises(RuntimeError, match=r"monitor 99 does not exist.*valid: 0\.\.1"):
+        _vs(monitor=99)
+    _vs(monitor=0)
+    _vs(monitor=1)  # both real indices must pass
+
+
+def test_region_entirely_offscreen_raises_instead_of_returning_empty():
+    """THE probe finding: an off-screen region used to yield a crop that screen_read_text
+    reported as count:0 and screen_verify graded CONFIRMED/changed — certifying an action
+    against pixels that do not exist."""
+    with pytest.raises(RuntimeError, match="entirely outside the desktop"):
+        _vs(region=[99000, 99000, 10, 10])
+    with pytest.raises(RuntimeError, match="entirely outside the desktop"):
+        _vs(region=[-500, 0, 100, 100])  # fully left of the desktop
+
+
+def test_region_partially_onscreen_is_allowed():
+    """Clamping a partly-visible region is legitimate; only a wholly absent one is an error."""
+    _vs(region=[-50, -50, 200, 200])
+    _vs(region=[7600, 2100, 500, 500])
+
+
+def test_region_with_nonpositive_size_raises():
+    for bad in ([0, 0, 0, 10], [0, 0, 10, 0], [0, 0, -5, 10]):
+        with pytest.raises(RuntimeError, match="non-positive"):
+            _vs(region=bad)
+
+
+def test_validate_scope_is_lenient_when_bounds_unknown():
+    """Before the first geo probe W/H are 0; refusing every region then would break the
+    cold path that has to capture in order to learn the bounds."""
+    _capture().validate_scope(GEO2, 0, 0, region=[99000, 99000, 10, 10])
