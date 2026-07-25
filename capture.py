@@ -604,8 +604,9 @@ def grab(node_id, rebuild=True):
 
     rebuild=False skips the stale-pipeline teardown+rebuild path so an idle monitor
     fails fast (one build) instead of paying a second full pipeline build."""
-    sink = _get_sink(node_id)
-    sample = sink.emit("try-pull-sample", 2 * Gst.SECOND) or sink.props.last_sample
+    with state.stage("pull"):
+        sink = _get_sink(node_id)
+        sample = sink.emit("try-pull-sample", 2 * Gst.SECOND) or sink.props.last_sample
     if sample is None and rebuild:
         # Stale/half-dead pipeline (e.g. idle monitor never primed): rebuild once.
         _drop(node_id)
@@ -617,7 +618,8 @@ def grab(node_id, rebuild=True):
             f"no frame from node {node_id} (monitor may be off, or ON-but-static — GNOME "
             f"streams on damage, so an idle screen emits no frame until something changes)"
         )
-    w, h, arr = _sample_to_rgba(sample)
+    with state.stage("decode"):
+        w, h, arr = _sample_to_rgba(sample)
     changed = _note_frame(
         node_id, arr
     )  # track freshness so screenshots can flag a possibly-stale frame
@@ -1194,11 +1196,14 @@ def encode_store(img, ox, oy, label, t0, max_edge=None):
     le = max(dw, dh)
     me = int(max_edge) if max_edge else state.MAX_EDGE
     scale = min(1.0, me / le) if le else 1.0
-    out = (
-        img
-        if scale >= 1.0
-        else img.resize((max(1, round(dw * scale)), max(1, round(dh * scale))), LANCZOS)
-    )
+    with state.stage("resize"):
+        out = (
+            img
+            if scale >= 1.0
+            else img.resize(
+                (max(1, round(dw * scale)), max(1, round(dh * scale))), LANCZOS
+            )
+        )
     vid = state.next_view_id()
     state.SESSION["view"] = {
         "ox": ox,
@@ -1209,6 +1214,8 @@ def encode_store(img, ox, oy, label, t0, max_edge=None):
         "id": vid,
     }
     buf = io.BytesIO()
+    _enc = state.stage("encode")
+    _enc.__enter__()
     if max_edge and me < state.MAX_EDGE:
         out.convert("RGB").save(buf, format="WEBP", quality=80, method=4)
     else:
@@ -1219,6 +1226,7 @@ def encode_store(img, ox, oy, label, t0, max_edge=None):
             method=WEBP_METHOD,
             quality=WEBP_EFFORT,
         )
+    _enc.__exit__(None, None, None)
     raw = buf.getvalue()
     ms = int((time.time() - t0) * 1000)
     txt = (

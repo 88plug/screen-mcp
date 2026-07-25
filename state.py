@@ -6,6 +6,8 @@ here (avoids circular deps)."""
 
 import sys
 import os
+import time
+import contextlib
 import gi
 
 gi.require_version("Gio", "2.0")
@@ -20,6 +22,50 @@ SC = "org.freedesktop.portal.ScreenCast"
 MAX_EDGE = int(
     os.environ.get("MCP_SCREEN_MAX_EDGE", "2576")
 )  # Opus 4.7 native long edge
+
+# --- per-call stage timing -------------------------------------------------------------
+# Lives here because `state` is the one module every other imports (server + capture both
+# stamp stages) and it imports no app module, so this cannot create a cycle.
+#
+# This exists because benching stages OFFLINE repeatedly gave numbers that did not transfer:
+# an isolated LANCZOS bench said 553ms while the entire live shot was 603ms. Guessing which
+# stage dominates is how ~46ms/grab of memcpy and a 264ms per-shot subprocess both survived
+# a whole optimization pass. Measure the real call or do not claim a breakdown.
+STAGE_MS = {}
+
+
+def stage_reset():
+    STAGE_MS.clear()
+
+
+@contextlib.contextmanager
+def stage(name):
+    """Accumulate wall ms under `name`. Re-entrant by summing, so a stage entered inside a
+    poll loop reports its TOTAL cost across iterations — which is the number that matters."""
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        STAGE_MS[name] = STAGE_MS.get(name, 0.0) + (time.perf_counter() - t0) * 1000.0
+
+
+def stage_line(total_ms=None):
+    """Compact `stages: grab 180 enc 195 …` for a tool response; '' when nothing stamped.
+    Stages under 1ms are dropped as noise. `other` is whatever the stamps did not cover —
+    an unexplained remainder is a finding, not something to hide."""
+    if not STAGE_MS:
+        return ""
+    parts = [
+        f"{k} {v:.0f}"
+        for k, v in sorted(STAGE_MS.items(), key=lambda kv: -kv[1])
+        if v >= 1.0
+    ]
+    if total_ms is not None:
+        rest = total_ms - sum(STAGE_MS.values())
+        if rest >= 1.0:
+            parts.append(f"other {rest:.0f}")
+    return ("stages: " + " ".join(parts) + "ms") if parts else ""
+
 
 bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
 sender = bus.get_unique_name()[1:].replace(".", "_")

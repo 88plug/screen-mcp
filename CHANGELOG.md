@@ -15,6 +15,16 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **Per-stage timing on every screenshot and action (`stages: …ms`).** Stage stamps live in
+  `state.py` (the one module everything imports, so no cycle) and cover pull, decode, resize,
+  encode, aware, ground, gate and settle, plus an explicit `other` remainder so unexplained
+  time is visible rather than hidden. This exists because benching stages OFFLINE kept
+  producing numbers that did not transfer — an isolated LANCZOS bench read 553ms while the
+  whole live shot was 603ms — and guessing which stage dominated is how ~46ms/grab of memcpy
+  and a 264ms-per-shot subprocess both survived an entire optimization pass. First real
+  breakdown of a 601ms monitor shot: `resize 408, encode 173, decode 19, aware 1` with `pull`
+  under 1ms. Resize is 68% and the current top cost.
+
 - **Awareness probe cached — it was spawning a Python subprocess on every screenshot.**
   `awareness.summary()` runs per shot. When the optional window-info extension isn't loaded
   it fell through to `atspi_titles()`, which spawns a fresh interpreter (measured 263.6ms)

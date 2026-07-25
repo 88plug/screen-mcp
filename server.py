@@ -229,6 +229,7 @@ def _verify(args, fn):
 # ---- tools ----
 def tool_screenshot(args):
     t0 = time.time()
+    state.stage_reset()
     if args.get("regeo"):
         capture.ensure_geo(force=True)
     region = args.get("region")
@@ -263,16 +264,18 @@ def tool_screenshot(args):
                     _a["ev"] = capture.arm_damage(_n)
                     return ok
 
-                changed, _ = reliability.wait_for_changed_frame(
-                    lambda n: capture.grab(n),
-                    node,
-                    base,
-                    timeout=min(MAX_WAIT_MS / 1000.0, 2.5),
-                    mode=capture.WAIT_MODE,
-                    wait_fn=_wait_damage,
-                    note_fn=capture.note_wake,
-                )
-            _settle(node, timeout=min(MAX_WAIT_MS / 1000.0, 2.0))
+                with state.stage("gate"):
+                    changed, _ = reliability.wait_for_changed_frame(
+                        lambda n: capture.grab(n),
+                        node,
+                        base,
+                        timeout=min(MAX_WAIT_MS / 1000.0, 2.5),
+                        mode=capture.WAIT_MODE,
+                        wait_fn=_wait_damage,
+                        note_fn=capture.note_wake,
+                    )
+            with state.stage("settle"):
+                _settle(node, timeout=min(MAX_WAIT_MS / 1000.0, 2.0))
         except Exception:
             pass
         state.SESSION["last_input_t"] = (
@@ -304,7 +307,8 @@ def tool_screenshot(args):
     sense_elements = None
     aware = "awareness: unavailable"
     try:
-        aware = awareness.summary()
+        with state.stage("aware"):
+            aware = awareness.summary()
     except Exception:
         pass
     view_ctx = [ox, oy, raw.width, raw.height]  # geometry key for the world-model
@@ -343,7 +347,8 @@ def tool_screenshot(args):
                 pass
         else:
             try:
-                marked, elements = grounding.annotate(img)
+                with state.stage("ground"):
+                    marked, elements = grounding.annotate(img)
                 sense_elements = elements
                 img = marked
                 store = {}
@@ -384,6 +389,9 @@ def tool_screenshot(args):
         # — makes _resolve_element's staleness check detect that cached element coords are
         # from an older, possibly-superseded frame.
         state.SESSION["elements_view_id"] = state.SESSION["view"]["id"]
+    _sl = state.stage_line(int((time.time() - t0) * 1000))
+    if _sl:
+        content.insert(0, _txt(_sl))
     content.insert(0, _txt("awareness: " + aware))
     asleep = capture.asleep_hint(
         monitor
@@ -637,6 +645,7 @@ def _action(name, fn, args):
     6. Append a redacted record to the actions.jsonl audit log.
     7. Optional auto-screenshot."""
     t0 = time.time()
+    state.stage_reset()
     args = _resolve_element(args)
     # Stale-view pre-check: if the caller bound coords to a superseded screenshot, reject up front
     # (before any pointer motion / focus change) so a misbound click never lands on the wrong spot.
@@ -768,7 +777,11 @@ def _action(name, fn, args):
         )
     except Exception:
         pass
-    return {"content": _maybe_shot(args, res["content"], t0)}
+    out = _maybe_shot(args, res["content"], t0)
+    _sl = state.stage_line(int((time.time() - t0) * 1000))
+    if _sl:
+        out = list(out) + [_txt(_sl)]
+    return {"content": out}
 
 
 def _watch_node(args):
