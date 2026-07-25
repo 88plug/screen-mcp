@@ -15,6 +15,25 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **New `screen_verify` — grade the last action instead of eyeballing a screenshot.**
+  Returns CONFIRMED | PARTIAL | NO_OP | DIVERGED, the same vocabulary as os-control-mcp's
+  `os_verify`, and the `pixel` block it returns is exactly what `os_verify` consumes — so
+  the GUI and OS verdicts compose. NO_OP is the one worth having: the screen never changed,
+  so the click missed or the keys went to the wrong window — the failure a screenshot makes
+  you infer by eye. (Steal from QuickDesk's `verify_action_result`.)
+
+  Its first eval found a false-CONFIRMED: the baseline is a hash of the whole stamped node
+  frame, and hashing a REGION crop against it compares different images, so it always
+  differed and every action graded as changed — including a mouse move, which cannot change
+  the screen at all (the cursor is METADATA, never baked into frames). The change check now
+  re-grabs the same node; with no baseline node, `changed` is reported null and excluded
+  from the verdict rather than invented. Same false-CONFIRMED class os-control had just
+  fixed in `os_verify`. Post-fix: inert mouse move → NO_OP, hover highlight → CONFIRMED in
+  23ms.
+
+  `wait_text` and `verify` now share one `_perceive()` (recall → OCR → learn), so neither
+  can drift back into reading the world-model cache without writing it.
+
 - **New `screen_wait_text` — block until text appears, then return its click coords.**
   Replaces screenshotting in a loop to see whether something finished. Naive polling was a
   non-starter (grounding costs ~7.7s on a cold screen), so it uses the shape this session

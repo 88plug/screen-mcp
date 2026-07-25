@@ -126,6 +126,39 @@ Type text (Unicode ok via clipboard paste; ASCII via keysyms). `enter=true` pres
 | `focus` | string | Raise + focus before type |
 | `shot`, `verify`, `force`, `region`, `settle` | | |
 
+### `screen_verify` — Verify Last Action (RO)
+
+Did the last action actually do what you expected? Returns a **verdict**, not pixels.
+
+| Verdict | Meaning |
+|---|---|
+| `CONFIRMED` | Every check you asked for passed |
+| `PARTIAL` | Some passed |
+| `NO_OP` | The screen never changed — the click missed, or keys went to the wrong window |
+| `DIVERGED` | Something changed, but not what you expected |
+
+| Arg | Type | Notes |
+|---|---|---|
+| `expect_text` | string | Text that should now be on screen |
+| `expect_gone` | string | Text that should no longer be on screen |
+| `expect_change` | bool | Require the screen to have changed at all (default true) |
+| `timeout` / `interval` | number | Default 5 s / 0.25 s |
+| `region` / `monitor` | | Scope |
+
+Verdicts use the same vocabulary as os-control-mcp's `os_verify`, and the returned
+`pixel` block is exactly what `os_verify` consumes — so a GUI verdict and an OS verdict
+read the same way and compose.
+
+!!! warning
+    The change check re-grabs the **same monitor node** the pre-action baseline was taken
+    from. Hashing a region crop against a whole-frame baseline compares different images,
+    so it always differs — which made every action, including an inert mouse move, grade
+    `CONFIRMED`. With no baseline node, `changed` is reported as `null` and excluded from
+    the verdict rather than invented.
+
+Measured: an inert mouse move → `NO_OP`; a hover that highlights a menu item →
+`CONFIRMED` in 23 ms.
+
 ### `screen_wait_text` — Wait for Text (RO)
 
 Block until `text` appears on screen (or timeout), then return its click coords. Use
@@ -284,6 +317,7 @@ Return the normalized change signal from the most recent frame diff — `{change
 | `screen_type` | Type Text | ACT |
 | `screen_read_text` | Read Screen Text (No Image) | RO |
 | `screen_wait_text` | Wait for Text | RO |
+| `screen_verify` | Verify Last Action | RO |
 | `screen_read_selection` | Read Selection (Exact Text) | ACT |
 | `screen_focus` | Focus Window | ACT |
 | `screen_do` | Batch Actions | DEST |

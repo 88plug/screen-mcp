@@ -428,6 +428,160 @@ def _text_match(needle, hay):
     return squash(n) in squash(h)
 
 
+def _perceive(img, ox, oy, aware):
+    """Elements for a frame as [{label, role, abs:(x,y)}], world-model first.
+
+    Shared by screen_wait_text and screen_verify so both get the same recall-then-OCR
+    behaviour and both LEARN what they ground — wait_text originally read the cache without
+    writing it and could never warm up. Returns (elements, used_ocr)."""
+    hit = worldmodel.MAP.recall(img, aware, [ox, oy, img.width, img.height])
+    if hit:
+        return [
+            {"label": v.get("label"), "role": v.get("role"), "abs": (v["x"], v["y"])}
+            for v in hit["elements"].values()
+        ], False
+    try:
+        with state.stage("ground"):
+            _m, raw = grounding.annotate(img)
+    except Exception:
+        return [], True
+    mid = lambda b: (ox + (b[0] + b[2]) // 2, oy + (b[1] + b[3]) // 2)  # noqa: E731
+    try:
+        worldmodel.MAP.observe(
+            img,
+            {
+                e["id"]: {
+                    "x": mid(e["bbox"])[0],
+                    "y": mid(e["bbox"])[1],
+                    "label": e.get("label"),
+                    "role": e.get("role"),
+                }
+                for e in raw
+            },
+            aware,
+            [ox, oy, img.width, img.height],
+        )
+    except Exception:
+        pass
+    return [
+        {"label": e.get("label"), "role": e.get("role"), "abs": mid(e["bbox"])}
+        for e in raw
+    ], True
+
+
+def tool_verify(args):
+    """Did the last action actually do what you expected? Returns a VERDICT, not pixels.
+
+    Replaces the screenshot-and-eyeball loop after an action. Verdicts match
+    os-control-mcp's os_verify vocabulary (CONFIRMED | PARTIAL | NO_OP | DIVERGED) so a
+    GUI verdict and an OS verdict read the same way, and the `pixel` block it returns is
+    the same contract os_verify consumes.
+
+    NO_OP is the one worth having: the screen never changed, so the click missed or the
+    key went to the wrong window — the failure a screenshot makes you infer by eye."""
+    t0 = time.time()
+    state.stage_reset()
+    want_text = args.get("expect_text")
+    want_gone = args.get("expect_gone")
+    timeout = min(MAX_WAIT_MS / 1000.0, float(args.get("timeout", 5)))
+    interval = max(0.05, float(args.get("interval", 0.25)))
+    region, monitor = args.get("region"), args.get("monitor")
+    # Baseline: the pre-action frame _action stamped, when it is still relevant. Falling
+    # back to "now" would compare the post-action screen against itself and always say
+    # NO_OP.
+    # The baseline is a hash of the WHOLE stamped node frame. Comparing it against a hash
+    # of a REGION crop is comparing different images, so it always differs and every action
+    # grades CONFIRMED-changed — including a mouse move, which cannot change the screen at
+    # all (the cursor is METADATA, never baked into frames). Caught live. So the change
+    # check re-grabs that same node; with no baseline node, `changed` is UNKNOWN (null)
+    # and excluded from the verdict rather than invented.
+    base = state.SESSION.get("last_input_hash")
+    base_node = state.SESSION.get("last_input_node")
+    if base_node is None:
+        base = None
+    try:
+        aware = awareness.summary()
+    except Exception:
+        aware = "unavailable"
+    deadline = time.monotonic() + timeout
+    last_hash, grabs, ocr = None, 0, 0
+    changed, found_text, gone_ok, hit = False, None, None, None
+    while True:
+        try:
+            with state.stage("capture"):
+                img, ox, oy = capture.capture_desktop(region, monitor, fresh=False)
+            grabs += 1
+        except RuntimeError as e:
+            return {"content": [_txt(f"verify: {e}")], "isError": True}
+        if base is not None and not changed:
+            try:  # compare like-for-like: the same node the baseline came from
+                if reliability.frame_hash(capture.grab(base_node)[2]) != base:
+                    changed = True
+            except Exception:
+                pass
+        h = reliability.frame_hash(np.asarray(img))
+        if h != last_hash:
+            last_hash = h
+            if want_text or want_gone:
+                els, used = _perceive(img, ox, oy, aware)
+                ocr += 1 if used else 0
+                if want_text:
+                    hit = next(
+                        (e for e in els if _text_match(want_text, e.get("label"))), None
+                    )
+                    found_text = hit is not None
+                if want_gone:
+                    gone_ok = not any(
+                        _text_match(want_gone, e.get("label")) for e in els
+                    )
+        checks = {
+            "changed": changed if base is not None else None,
+            "expect_text": found_text,
+            "expect_gone": gone_ok,
+        }
+        wanted = [v for k, v in checks.items() if v is not None and _wanted(k, args)]
+        done = bool(wanted) and all(wanted)
+        if done or time.monotonic() >= deadline:
+            met = sum(1 for v in wanted if v)
+            if wanted and met == len(wanted):
+                verdict = "CONFIRMED"
+            elif met:
+                verdict = "PARTIAL"
+            elif base is not None and not changed:
+                verdict = "NO_OP"
+            else:
+                verdict = "DIVERGED"
+            ms = int((time.time() - t0) * 1000)
+            body = {
+                "verdict": verdict,
+                "checks": checks,
+                "ms": ms,
+                "grabs": grabs,
+                "ocr_passes": ocr,
+                "pixel": {"changed": bool(changed)},
+            }
+            if hit:
+                body["at"] = {
+                    "text": hit.get("label"),
+                    "x": hit["abs"][0],
+                    "y": hit["abs"][1],
+                }
+            out = [_txt(json.dumps(body, separators=(",", ":")))]
+            sl = state.stage_line(ms)
+            if sl:
+                out.append(_txt(sl))
+            return {"content": out}
+        time.sleep(interval)
+
+
+def _wanted(key, args):
+    """Was this check actually asked for? An unasked check must not count toward the
+    verdict — otherwise a caller who only passed expect_text gets graded on `changed`."""
+    if key == "changed":
+        return bool(args.get("expect_change", True))
+    return args.get(key) is not None
+
+
 def tool_wait_text(args):
     """Block until `text` appears on screen, or timeout. Returns its click coords.
 
@@ -467,53 +621,9 @@ def tool_wait_text(args):
             # screen we have already learned — a screen we are still WAITING to change
             # cannot match, which is what makes this safe here. Turns "the text is already
             # there" from a ~7.2s OCR into ~50ms.
-            hit = worldmodel.MAP.recall(img, aware, [ox, oy, img.width, img.height])
-            if hit:
-                found = [
-                    {
-                        "label": v.get("label"),
-                        "role": v.get("role"),
-                        "abs": (v["x"], v["y"]),
-                    }
-                    for v in hit["elements"].values()
-                ]
-            else:
-                ocr_passes += 1
-                try:
-                    with state.stage("ground"):
-                        _m, raw_found = grounding.annotate(img)
-                except Exception:
-                    raw_found = []
-                found = [
-                    {
-                        "label": e.get("label"),
-                        "role": e.get("role"),
-                        "abs": (
-                            ox + (e["bbox"][0] + e["bbox"][2]) // 2,
-                            oy + (e["bbox"][1] + e["bbox"][3]) // 2,
-                        ),
-                    }
-                    for e in raw_found
-                ]
-                # LEARN it. Reading the cache without ever writing it means this loop can
-                # never warm up: a second wait on the same screen re-pays the full OCR.
-                try:
-                    worldmodel.MAP.observe(
-                        img,
-                        {
-                            e["id"]: {
-                                "x": ox + (e["bbox"][0] + e["bbox"][2]) // 2,
-                                "y": oy + (e["bbox"][1] + e["bbox"][3]) // 2,
-                                "label": e.get("label"),
-                                "role": e.get("role"),
-                            }
-                            for e in raw_found
-                        },
-                        aware,
-                        [ox, oy, img.width, img.height],
-                    )
-                except Exception:
-                    pass
+            els, used = _perceive(img, ox, oy, aware)
+            ocr_passes += 1 if used else 0
+            found = els
             for e in found:
                 if _text_match(needle, e.get("label")):
                     cx, cy = e["abs"]
@@ -1426,6 +1536,36 @@ TOOLS = [
         },
     },
     {
+        "name": "screen_verify",
+        "title": "Verify Last Action",
+        "annotations": _RO,
+        "description": "Did the last action actually do what you expected? Returns a VERDICT instead of pixels: CONFIRMED | PARTIAL | NO_OP | DIVERGED — the same vocabulary as os-control-mcp's os_verify, and the `pixel` block it returns is what os_verify consumes. NO_OP is the valuable one: the screen never changed, so the click missed or the keys went to the wrong window. Pass expect_text (should appear), expect_gone (should disappear), expect_change (default true). Cheaper than a screenshot and it grades the outcome for you.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "expect_text": {
+                    "type": "string",
+                    "description": "text that should now be on screen",
+                },
+                "expect_gone": {
+                    "type": "string",
+                    "description": "text that should no longer be on screen",
+                },
+                "expect_change": {
+                    "type": "boolean",
+                    "description": "require the screen to have changed at all (default true)",
+                },
+                "timeout": {"type": "number", "description": "seconds, default 5"},
+                "interval": {
+                    "type": "number",
+                    "description": "poll seconds, default 0.25",
+                },
+                "region": _REGION,
+                "monitor": {"type": "number"},
+            },
+        },
+    },
+    {
         "name": "screen_wait_text",
         "title": "Wait for Text",
         "annotations": _RO,
@@ -1656,6 +1796,7 @@ HANDLERS = {
     "screen_session": recorder.tool_session,
     "screen_read_text": tool_read_text,
     "screen_wait_text": tool_wait_text,
+    "screen_verify": tool_verify,
     "screen_diag": tool_diag,
     "screen_sense": tool_sense,
 }
