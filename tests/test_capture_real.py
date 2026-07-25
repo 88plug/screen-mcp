@@ -125,3 +125,59 @@ def test_encode_store_view_transform_round_trips():
     gx, gy = inp.resolve_xy({"x": cx, "y": cy, "space": "view"})
     assert gx == pytest.approx(3840 + dw / 2, abs=2)
     assert gy == pytest.approx(dh / 2, abs=2)
+
+
+# --- server handlers: previously ZERO coverage, validated only by driving the desktop ---
+
+
+def _server():
+    pytest.importorskip("gi")
+    import server
+
+    return server
+
+
+def test_text_match_is_the_real_function_not_a_copy():
+    """This test previously RE-IMPLEMENTED _text_match instead of importing it, so it
+    could not fail when the shipped function broke — the vacuous-test failure mode.
+    OCR renders the same button as 'Launch installer' or 'Launchinstaller' between runs."""
+    m = _server()._text_match
+    assert m("Launch installer", "Launchinstaller")
+    assert m("Launchinstaller", "Launch installer")
+    assert m("launch", "Launchinstaller")
+    assert not m("Launch installer", "Reboot now")
+
+
+def test_wanted_excludes_checks_the_caller_never_asked_for():
+    """A caller passing only expect_text must not be graded on `changed` — otherwise
+    screen_verify reports PARTIAL for a check nobody requested."""
+    w = _server()._wanted
+    assert w("expect_text", {"expect_text": "x"})
+    assert not w("expect_text", {})
+    assert w("changed", {})  # expect_change defaults true
+    assert not w("changed", {"expect_change": False})
+
+
+def test_every_registered_handler_is_callable():
+    """HANDLERS is the dispatch table; a rename that lands there but not on the function
+    is a runtime AttributeError on first use, not an import error."""
+    srv = _server()
+    assert len(srv.HANDLERS) >= 20
+    for name, fn in srv.HANDLERS.items():
+        assert name.startswith("screen_"), name
+        assert callable(fn), name
+
+
+def test_every_declared_tool_has_a_handler_and_annotations():
+    """A tool in TOOLS with no HANDLERS entry advertises itself and then fails when
+    called — the MCP-compliance gap the 88plug checklist calls schema drift."""
+    srv = _server()
+    declared = {t["name"] for t in srv.TOOLS}
+    handled = set(srv.HANDLERS) | {
+        "screen_reload"
+    }  # reload is special-cased pre-dispatch
+    assert declared - handled == set(), f"declared but unhandled: {declared - handled}"
+    for t in srv.TOOLS:
+        assert t.get("title"), t["name"]
+        assert t.get("annotations"), t["name"]
+        assert "Returns" in t["description"] or "returns" in t["description"], t["name"]

@@ -1771,7 +1771,7 @@ TOOLS = [
         "name": "screen_sense",
         "title": "Cross-Layer Pixel Signal",
         "annotations": _RO,
-        "description": "Return the normalized change signal from the most recent frame diff — {changed, opened, modal, no_op, activity} — so a verifier can fuse the GUI layer with the OS layer. Call right after a screen action, then pass the `pixel` object to os-control-mcp's os_verify (action=end, pixel=...). This is the pixel half of cross-layer action verification: it lets the agent catch a GUI that changed while the underlying service did not (or vice-versa). Read-only.",
+        "description": 'Return the normalized change signal from the most recent frame diff — {changed, opened, modal, no_op, activity} — so a verifier can fuse the GUI layer with the OS layer. Call right after a screen action, then pass the `pixel` object to os-control-mcp\'s os_verify (action=end, pixel=...). This is the pixel half of cross-layer action verification: it lets the agent catch a GUI that changed while the underlying service did not (or vice-versa). Passive — it reads whatever the LAST action already left behind and does not wait; use screen_verify when the GUI effect may lag. Returns {"pixel": {changed, opened, modal, no_op, activity}}. Read-only.',
         "inputSchema": {"type": "object", "properties": {}},
     },
 ]

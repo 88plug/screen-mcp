@@ -181,11 +181,11 @@ Module map:
 - `screen_diag` is the first thing to check when capture/clicks/cursor misbehave.
 
 <!-- drift-detector:start -->
-<!-- calibrated 2026-07-25 · last 50 sessions · 50 sampled · drift rate 39.2% -->
+<!-- calibrated 2026-07-25 · last 50 sessions · 50 sampled · drift rate 39.1% -->
 
 ## Anti-drift (auto-calibrated from real session data)
 
-Drift observed in 39.2% of turns across 50 recent sessions.
+Drift observed in 39.1% of turns across 50 recent sessions.
 
 - **Verbosity (long sentences)** (fires in ~100% of drifted turns): Break sentences at conjunctions. Target ≤15 words/sentence.
 - **Response length** (fires in ~100% of drifted turns): Lead with the answer; cut trailing restatements.

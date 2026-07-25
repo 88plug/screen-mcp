@@ -144,7 +144,10 @@ def test_pixel_signal_modal_overlay():
 
 def test_pixel_signal_nonmodal_overlay_changes_but_not_modal():
     p = sense.to_pixel_signal(
-        {"settle": {"activity": "minor"}, "overlay": {"present": True, "kind": "banner"}}
+        {
+            "settle": {"activity": "minor"},
+            "overlay": {"present": True, "kind": "banner"},
+        }
     )
     assert p["changed"] is True and p["modal"] is False
 

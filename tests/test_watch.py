@@ -20,7 +20,11 @@ def test_jitter_sustained_local():
     acts = ["local"] * 8
     r = classify_watch_timeline(acts)
     assert r["verdict"] == "jitter"
-    assert "crazy" in r["reason"] or "jitter" in r["reason"].lower() or "force" in r["reason"]
+    assert (
+        "crazy" in r["reason"]
+        or "jitter" in r["reason"].lower()
+        or "force" in r["reason"]
+    )
 
 
 def test_jitter_threshold_fraction():
