@@ -15,6 +15,14 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **Awareness probe cached — it was spawning a Python subprocess on every screenshot.**
+  `awareness.summary()` runs per shot. When the optional window-info extension isn't loaded
+  it fell through to `atspi_titles()`, which spawns a fresh interpreter (measured 263.6ms)
+  purely to render the text line "awareness: unavailable". Whether the extension is loaded
+  only changes on a Wayland re-login or a `screen_reload`, so the negative verdict is now
+  cached (`MCP_SCREEN_AWARENESS_TTL_S`, default 30s) rather than re-probed every frame.
+  A plain monitor shot went 1084ms -> 603ms.
+
 - **Two hidden 33MB copies removed from every grab.** `_sample_to_rgba` ran on every frame
   pull — including every poll of the settle and change-gate loops — and did `bytes(mi.data)`
   (a full memcpy of the mapped 4K frame, 9.7ms) followed by `arr[..., [2,1,0,3]]` (a fancy-index

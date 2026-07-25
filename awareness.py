@@ -10,11 +10,22 @@ None / [] / "unavailable". As a partial fallback (native GTK/AT-SPI apps only) w
 enumerate window titles via AT-SPI.
 """
 
+import os
+import time
 import json
 
 from gi.repository import Gio, GLib
 
 import state
+
+# Negative-verdict cache for summary()'s degraded path. When window-info isn't loaded,
+# summary() falls back to atspi_titles(), which SPAWNS A PYTHON SUBPROCESS — measured at
+# 263.6ms, on EVERY screenshot, purely to render the line "awareness: unavailable". That was
+# ~24% of a 1084ms shot. Whether the extension is loaded only changes on a Wayland re-login
+# (which the extension itself requires) or a screen_reload, so re-probing per shot is waste.
+# Cached with a TTL rather than forever so AT-SPI coming up later is still picked up.
+AWARENESS_TTL_S = float(os.environ.get("MCP_SCREEN_AWARENESS_TTL_S", "30"))
+_AWARE_CACHE = {"t": 0.0, "text": None}
 
 # The extension service is owned by the Shell process.
 DEST = "org.gnome.Shell"
@@ -275,12 +286,21 @@ def summary():
             title = fw.get("title") or ""
             return f"focused: {app} — {title}".rstrip(" —")
 
+        # Degraded path only — see _AWARE_CACHE. atspi_titles() below costs a subprocess
+        # spawn; serve a recent verdict instead of paying it on every screenshot.
+        now = time.monotonic()
+        cached = _AWARE_CACHE["text"]
+        if cached is not None and (now - _AWARE_CACHE["t"]) < AWARENESS_TTL_S:
+            return cached
+
         hint = _ext_install_state()
         titles = atspi_titles()
         if titles:
-            return f"awareness: window-info not loaded ({hint}); AT-SPI sees {len(titles)} window(s)"
-
-        return f"awareness: unavailable — {hint}"
+            text = f"awareness: window-info not loaded ({hint}); AT-SPI sees {len(titles)} window(s)"
+        else:
+            text = f"awareness: unavailable — {hint}"
+        _AWARE_CACHE["t"], _AWARE_CACHE["text"] = now, text
+        return text
     except Exception:
         return "awareness: unavailable (window-info extension not loaded)"
 
