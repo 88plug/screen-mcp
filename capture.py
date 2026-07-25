@@ -53,6 +53,15 @@ LANCZOS = Image.Resampling.LANCZOS
 # The extra bytes are free: an image costs ceil(w/28)*ceil(h/28) visual tokens (4784 here)
 # regardless of encoded size, and 759KB of base64 is nowhere near the API's 10MB per-image
 # cap. Encode was 85% of a plain screenshot's wall time, so this is the whole latency win.
+#
+# DO NOT RE-TUNE without new evidence — the sweep was redone on the current RGB/INTER_AREA
+# output (9 reps, medians) and q=20 is already the floor:
+#   lossless m0 q20  202ms 659KB  <- shipped      lossless m1 q0+  344-613ms
+#   lossless m0 q30-50  237-251ms 603KB           PNG any level    343-768ms
+#   LOSSY q80/90/95     228-307ms                 <- SLOWER than lossless
+# Lossy is slower because it runs rate-distortion analysis; lossless m0 is fast entropy
+# coding. So the lossless guarantee costs nothing here — it is not a speed/quality tradeoff.
+# A 3-rep bench made q=40 look 8% faster; at 9 reps it is 24% SLOWER. Use medians.
 WEBP_METHOD = int(os.environ.get("MCP_SCREEN_WEBP_METHOD", "0"))
 WEBP_EFFORT = int(os.environ.get("MCP_SCREEN_WEBP_EFFORT", "20"))
 

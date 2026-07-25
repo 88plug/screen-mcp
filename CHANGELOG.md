@@ -15,6 +15,19 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **Encode re-swept and left alone — it is already at the floor (negative result).**
+  With the shipped `m=0 q=20` at 202ms median (9 reps) on the current RGB/INTER_AREA output,
+  nothing beats it: higher lossless effort is 237-251ms, `method=1` is 344-613ms, PNG is
+  343-768ms, and **lossy WebP is SLOWER** (228-307ms) because it runs rate-distortion
+  analysis while lossless method=0 is fast entropy coding. So the lossless guarantee costs
+  no speed at all — it is not a quality/latency tradeoff, and there is no reason to weaken
+  it. Recorded as a DO-NOT-RE-TUNE block in `capture.py` next to the constants.
+
+  Method note: a 3-rep bench made `q=40` look 8% faster and 8% smaller; at 9 reps it is 24%
+  SLOWER. Third time this session a small-sample bench pointed the wrong way (see also the
+  offline LANCZOS figure and the first filter eval) — medians, repeats, and measuring the
+  live path are the only things that have held up.
+
 - **Test harness is REAL-FIRST — the suite now executes capture.py instead of a stub.**
   `tests/conftest.py` unconditionally installed stub `gi`/`state`/`capture` modules into
   `sys.modules`, so 144 passing tests never ran a line of the shipped capture path. Every
