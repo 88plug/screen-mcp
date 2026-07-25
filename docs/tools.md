@@ -96,7 +96,14 @@ Press-drag from `(x1,y1)` to `(x2,y2)` in view-space. Use for sliders, reorder, 
 |---|---|---|
 | `x1`, `y1`, `x2`, `y2` | number | **Required** |
 | `button` | string | `left` \| `middle` \| `right` |
+| `modifiers` | array | Keys held for the whole gesture, e.g. `["shift"]` |
 | `space`, `view_id`, `shot`, `force`, `region`, `settle` | | |
+
+`modifiers` is what makes text selection work in a terminal running a TUI. Claude Code,
+vim and htop enable mouse tracking, so they consume the drag themselves and no terminal
+selection is ever made — a `screen_read_selection` afterwards then copies nothing.
+`modifiers: ["shift"]` makes the terminal emulator bypass the app's mouse grab and do its
+own selection. Modifiers release in a `finally`; a stuck Shift would corrupt later keys.
 
 ### `screen_key` — Press Key (ACT)
 

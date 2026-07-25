@@ -15,6 +15,16 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **`screen_drag` takes `modifiers`, held for the whole press-move-release.** Without it,
+  `screen_read_selection` could not be used where it matters most: a terminal running a TUI
+  (Claude Code, vim, htop) enables mouse tracking and consumes the drag itself, so no
+  terminal-level selection is ever made and the copy returns nothing. `modifiers: ["shift"]`
+  makes the terminal emulator bypass the app's mouse grab and select on its own. Verified
+  live end-to-end — shift+drag over a TUI pane then `ctrl+shift+c` returned the line
+  verbatim, box-drawing glyphs, em-dash and spacing intact, matching the pixels on screen.
+  Modifiers press inside the same device lock as the drag and release in a `finally` on both
+  the uinput and portal paths, because a stuck Shift would corrupt every later keystroke.
+
 - **New `screen_read_selection` — read text exactly, without OCR.** Copies the focused
   window's selection and returns it verbatim. An OCR-based read of a full 4K monitor
   loses ~8% of characters on sub-12px code (measured against known rendered text across

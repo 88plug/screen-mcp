@@ -1109,7 +1109,7 @@ TOOLS = [
         "name": "screen_drag",
         "title": "Drag",
         "annotations": _ACT,
-        "description": "Press-drag from (x1,y1) to (x2,y2) in view-space. Use for sliders, reorder, selection. button: left|middle|right. Returns after drag completes.",
+        "description": "Press-drag from (x1,y1) to (x2,y2) in view-space. Use for sliders, reorder, selection. button: left|middle|right. modifiers=['shift'] holds keys for the whole gesture — REQUIRED to select text in a terminal running a TUI (Claude Code, vim, htop), which otherwise eats the drag itself and leaves nothing to copy. Returns after drag completes.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1120,6 +1120,11 @@ TOOLS = [
                 "space": _SPACE,
                 "view_id": _VIEWID,
                 "button": {"type": "string"},
+                "modifiers": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "keys held for the whole drag, e.g. ['shift'] to force a terminal selection past a TUI's mouse grab",
+                },
                 "shot": _SHOT,
                 "force": _FORCE,
                 "region": _REGION,

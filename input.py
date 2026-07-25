@@ -488,30 +488,63 @@ def scroll(args):
         return _ok(f"scrolled {direction} x{amount} (discrete)")
 
 
+def _mod_codes(args):
+    """Map a `modifiers` arg (["shift"], or "shift+ctrl") to evdev keycodes, dropping any
+    token we can't map. Returns (codes, label) — label echoes what actually got held so a
+    silently-dropped modifier can't look like it was applied."""
+    raw = args.get("modifiers") or ()
+    if isinstance(raw, str):
+        raw = [p for p in raw.replace("-", "+").split("+") if p.strip()]
+    codes, names = [], []
+    for tok in raw:
+        kc = _KC_MODS.get(str(tok).strip().lower())
+        if kc is not None:
+            codes.append(kc)
+            names.append(str(tok).strip().lower())
+    return codes, "+".join(names)
+
+
 def drag(args):
     sp = args.get("space", "view")
     vid = args.get("view_id")
     x1, y1 = resolve_xy({"x": args["x1"], "y": args["y1"], "space": sp, "view_id": vid})
     x2, y2 = resolve_xy({"x": args["x2"], "y": args["y2"], "space": sp, "view_id": vid})
-    if _use_uinput() and ui.drag(x1, y1, x2, y2, button=args.get("button", "left")):
+    mods, mod_label = _mod_codes(args)
+    held = f" holding {mod_label}" if mod_label else ""
+    if _use_uinput() and ui.drag(
+        x1, y1, x2, y2, button=args.get("button", "left"), mods=mods
+    ):
         _set_cmd(x2, y2)
         _stamp_input()
-        return _ok_uinput(f"dragged ({x1},{y1})->({x2},{y2}) [uinput]")
+        return _ok_uinput(f"dragged ({x1},{y1})->({x2},{y2}){held} [uinput]")
     btn = BTN.get(args.get("button", "left"), 0x110)
-    _goto(x1, y1)
-    GLib.usleep(20000)
-    _notify_button(btn, 1)
-    GLib.usleep(40000)
-    steps = 10
-    for i in range(1, steps + 1):
-        _goto(
-            int(round(x1 + (x2 - x1) * i / steps)),
-            int(round(y1 + (y2 - y1) * i / steps)),
-        )
-        GLib.usleep(15000)
-    GLib.usleep(40000)
-    _notify_button(btn, 0)
-    return _ok(f"dragged ({x1},{y1})->({x2},{y2})")
+    try:
+        for kc in mods:
+            _notify_keycode(kc, 1)
+        if mods:
+            GLib.usleep(12000)  # let the modifier latch before the press
+        _goto(x1, y1)
+        GLib.usleep(20000)
+        _notify_button(btn, 1)
+        GLib.usleep(40000)
+        steps = 10
+        for i in range(1, steps + 1):
+            _goto(
+                int(round(x1 + (x2 - x1) * i / steps)),
+                int(round(y1 + (y2 - y1) * i / steps)),
+            )
+            GLib.usleep(15000)
+        GLib.usleep(40000)
+        _notify_button(btn, 0)
+    finally:
+        for kc in reversed(
+            mods
+        ):  # ALWAYS release — a stuck modifier poisons later keys
+            try:
+                _notify_keycode(kc, 0)
+            except Exception:
+                pass
+    return _ok(f"dragged ({x1},{y1})->({x2},{y2}){held}")
 
 
 # ---------------------------------------------------------------------------

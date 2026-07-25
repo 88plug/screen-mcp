@@ -236,23 +236,44 @@ def scroll(x, y, dy_notches=0, dx_notches=0, at=True):
     return True
 
 
-def drag(x1, y1, x2, y2, button="left", steps=20):
+def drag(x1, y1, x2, y2, button="left", steps=20, mods=()):
+    """Press-drag, optionally holding `mods` (evdev keycodes) for the WHOLE gesture.
+
+    Shift+drag is the reason this exists: a TUI that enables mouse tracking (Claude Code,
+    vim, htop) consumes the drag itself, so no terminal-level selection is ever made and a
+    copy afterwards returns nothing. Holding Shift makes the terminal emulator bypass the
+    app's mouse grab and do its own selection instead. Modifiers press inside the same
+    _LOCK as the drag so nothing interleaves, and release in a `finally` — a stuck Shift
+    would corrupt every keystroke that follows."""
     dev = ensure_device(*_bounds())
     if dev is None:
         return False
     code = _BTN.get(button, _BTN["left"])
     with _LOCK:
-        _abs_move(dev, x1, y1)
-        time.sleep(0.03)
-        dev.write(e.EV_KEY, code, 1)
-        dev.syn()
-        time.sleep(0.04)
-        for i in range(1, steps + 1):
-            _abs_move(dev, x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps)
-            time.sleep(0.012)
-        time.sleep(0.04)
-        dev.write(e.EV_KEY, code, 0)
-        dev.syn()
+        try:
+            for m in mods:
+                dev.write(e.EV_KEY, int(m), 1)
+                dev.syn()
+            if mods:
+                time.sleep(0.012)  # let the modifier latch propagate before the press
+            _abs_move(dev, x1, y1)
+            time.sleep(0.03)
+            dev.write(e.EV_KEY, code, 1)
+            dev.syn()
+            time.sleep(0.04)
+            for i in range(1, steps + 1):
+                _abs_move(dev, x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps)
+                time.sleep(0.012)
+            time.sleep(0.04)
+            dev.write(e.EV_KEY, code, 0)
+            dev.syn()
+        finally:
+            for m in reversed(list(mods)):  # ALWAYS release — a stuck modifier is worse
+                try:
+                    dev.write(e.EV_KEY, int(m), 0)
+                    dev.syn()
+                except Exception:
+                    pass
     return True
 
 

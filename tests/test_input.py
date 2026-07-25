@@ -534,11 +534,14 @@ def test_type_text_short_string_uses_keys(monkeypatch):
 
 def test_type_text_paste_opt_in_uses_clipboard(monkeypatch):
     calls = []
-    monkeypatch.setattr(inp, "_clip_paste", lambda t: (calls.append(t) or True))
+    monkeypatch.setattr(inp, "_clip_paste", lambda t: calls.append(t) or True)
     # Per-char path must NOT be taken when paste=True succeeds.
     monkeypatch.setattr(
-        inp, "_use_uinput",
-        lambda: (_ for _ in ()).throw(AssertionError("keys path taken despite paste=True")),
+        inp,
+        "_use_uinput",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("keys path taken despite paste=True")
+        ),
     )
     inp.type_text({"text": "claude@resolver.io", "paste": True})
     assert calls == ["claude@resolver.io"]
@@ -547,9 +550,10 @@ def test_type_text_paste_opt_in_uses_clipboard(monkeypatch):
 def test_type_text_non_ascii_uses_clipboard(monkeypatch):
     # Non-ASCII can't be emitted as keycodes → must paste even without the opt-in.
     calls = []
-    monkeypatch.setattr(inp, "_clip_paste", lambda t: (calls.append(t) or True))
+    monkeypatch.setattr(inp, "_clip_paste", lambda t: calls.append(t) or True)
     monkeypatch.setattr(
-        inp, "_use_uinput",
+        inp,
+        "_use_uinput",
         lambda: (_ for _ in ()).throw(AssertionError("keys path taken for non-ASCII")),
     )
     inp.type_text({"text": "café ☕"})
@@ -557,7 +561,9 @@ def test_type_text_non_ascii_uses_clipboard(monkeypatch):
 
 
 def test_type_text_paste_opt_in_falls_back_to_keys_when_unavailable(monkeypatch):
-    monkeypatch.setattr(inp, "_clip_paste", lambda t: False)  # wl-copy missing / paste failed
+    monkeypatch.setattr(
+        inp, "_clip_paste", lambda t: False
+    )  # wl-copy missing / paste failed
     _stub_key_emitters(monkeypatch)
     emitted = []
     monkeypatch.setattr(inp, "_char_to_keycode", lambda ch: (None, False))
@@ -565,3 +571,27 @@ def test_type_text_paste_opt_in_falls_back_to_keys_when_unavailable(monkeypatch)
     inp.type_text({"text": "hello", "paste": True})
     # keysym path emits each char twice (press + release); every char in order.
     assert emitted[::2] == list("hello")
+
+
+# --- drag modifiers: held for the whole gesture, mapped from names to evdev codes ---
+
+
+def test_mod_codes_maps_list_and_string_forms():
+    assert inp._mod_codes({"modifiers": ["shift"]}) == ([42], "shift")
+    assert inp._mod_codes({"modifiers": "shift+ctrl"}) == ([42, 29], "shift+ctrl")
+    assert inp._mod_codes({"modifiers": ["SHIFT", " Ctrl "]}) == (
+        [42, 29],
+        "shift+ctrl",
+    )
+
+
+def test_mod_codes_drops_unmappable_and_reports_only_what_is_held():
+    # A silently-dropped modifier must not be echoed as if it were applied.
+    codes, label = inp._mod_codes({"modifiers": ["shift", "hyper"]})
+    assert codes == [42]
+    assert label == "shift"
+
+
+def test_mod_codes_empty_when_absent():
+    assert inp._mod_codes({}) == ([], "")
+    assert inp._mod_codes({"modifiers": []}) == ([], "")
