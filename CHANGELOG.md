@@ -4,6 +4,35 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
 
 ## Unreleased
 
+- **WebP lossless encode is ~19x cheaper — a plain screenshot went 4194 ms → 1286 ms.**
+  Encoding was 85% of a shot's wall time (3564 ms of it), measured on a real 2576x1449
+  frame. libwebp's `method`/`quality` only trade CPU for bytes in lossless mode — the
+  pixels are identical at every setting — so `method=0, quality=20` is a free win:
+  195 ms for 140 KB more. Those bytes cost nothing, because an image is billed at
+  `ceil(w/28) * ceil(h/28)` visual tokens (4784 here) regardless of encoded size, and
+  759 KB of base64 is far under the API's 10 MB per-image cap. Env-overridable via
+  `MCP_SCREEN_WEBP_METHOD` / `MCP_SCREEN_WEBP_EFFORT`; `tests/test_encode.py` asserts
+  pixel-exact round-trips at every method/effort combination so the lossless guarantee
+  cannot silently regress.
+
+- **New `screen_read_selection` — read text exactly, without OCR.** Copies the focused
+  window's selection and returns it verbatim. An OCR-based read of a full 4K monitor
+  loses ~8% of characters on sub-12px code (measured against known rendered text across
+  a font-size sweep — an artifact of the 4K→2576 downscale, not of the filter: LANCZOS
+  beat box/bilinear/nearest at every size and stays the default). The clipboard is
+  **cleared before** the copy combo is sent: without that, an app that ignores the combo
+  leaves the prior clipboard in place and the tool would return the user's unrelated
+  clipboard contents labelled as screen-read text. The user's clipboard is saved and
+  restored regardless. Terminals need `combo='ctrl+shift+c'`.
+
+- **Post-action change-gate can wait on damage events instead of polling.**
+  `MCP_SCREEN_WAIT_MODE=poll|event|hybrid` (default `poll`, byte-identical to before).
+  Damage arrives every ~270–550 ms on an active desktop while the gate polls every 60 ms,
+  so most poll iterations grab and convert a 4K frame to learn nothing. `hybrid` blocks on
+  a real damage event with the poll interval kept as a backstop, so an absent event
+  degrades to today's behavior rather than stalling. `screen_diag` now reports damage
+  cadence, keepalive-resend counts and wake stats under `cursor.events`.
+
 - **Focus verification — root-cause fix for clicks landing on the wrong window/tab.**
   `screen_focus`/`focus=` no longer report success without confirming the correct
   window actually got raised: both the window-info-extension path (`activate_window`)

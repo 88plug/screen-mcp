@@ -202,3 +202,101 @@ def test_wait_for_stable_frame_handles_initial_grab_failure():
         grab, node=0, interval=0, timeout=0.05
     )
     assert stable is False  # fails open, no raise
+
+
+# --- probes A/B: event-driven wake for the post-action change-gate ---
+
+
+def _changing_grab(flip_after):
+    """grab_fn that returns a constant frame until `flip_after` calls, then a different one.
+    Counts calls so a probe can be scored on grabs-per-wait."""
+    n = {"calls": 0}
+
+    def grab(_node):
+        n["calls"] += 1
+        v = 0 if n["calls"] <= flip_after else 200
+        return (10, 10, np.full((10, 10, 3), v, dtype=np.uint8))
+
+    return grab, n
+
+
+def test_wait_for_changed_frame_poll_mode_detects_change():
+    grab, n = _changing_grab(flip_after=2)
+    base = reliability.frame_hash(grab(0)[2])
+    changed, _ = reliability.wait_for_changed_frame(
+        grab, node=0, baseline_hash=base, interval=0, timeout=1.0
+    )
+    assert changed is True
+
+
+def test_wait_for_changed_frame_event_mode_grabs_only_on_damage():
+    """Probe A: with a waiter that reports damage, the loop must not burn a grab per interval."""
+    grab, n = _changing_grab(flip_after=2)
+    base = reliability.frame_hash(grab(0)[2])
+    n["calls"] = 0
+    waits = {"n": 0}
+
+    def wait_fn(_budget):
+        waits["n"] += 1
+        return True  # damage every time
+
+    changed, _ = reliability.wait_for_changed_frame(
+        grab,
+        node=0,
+        baseline_hash=base,
+        interval=0,
+        timeout=1.0,
+        mode="event",
+        wait_fn=wait_fn,
+    )
+    assert changed is True
+    assert (
+        n["calls"] == 3
+    )  # two unchanged grabs, then the changed one — one per damage event
+    assert waits["n"] == 2
+
+
+def test_wait_for_changed_frame_event_mode_falls_back_to_poll_without_waiter():
+    grab, _n = _changing_grab(flip_after=1)
+    base = reliability.frame_hash(grab(0)[2])
+    changed, _ = reliability.wait_for_changed_frame(
+        grab, node=0, baseline_hash=base, interval=0, timeout=1.0, mode="event"
+    )
+    assert changed is True  # no wait_fn injected => original poll behaviour
+
+
+def test_wait_for_changed_frame_hybrid_counts_backstop_when_no_damage():
+    """Probe B negative signal: no damage event arrives, so the poll floor carries the loop."""
+    grab, _n = _changing_grab(flip_after=2)
+    base = reliability.frame_hash(grab(0)[2])
+    notes = []
+    changed, _ = reliability.wait_for_changed_frame(
+        grab,
+        node=0,
+        baseline_hash=base,
+        interval=0,
+        timeout=1.0,
+        mode="hybrid",
+        wait_fn=lambda _b: False,  # damage never arrives
+        note_fn=notes.append,
+    )
+    assert changed is True
+    assert "backstop_fires" in notes  # degraded to polling rather than stalling
+
+
+def test_wait_for_changed_frame_times_out_and_notes_it():
+    static = np.zeros((10, 10, 3), dtype=np.uint8)
+    base = reliability.frame_hash(static)
+    notes = []
+    changed, _ = reliability.wait_for_changed_frame(
+        lambda _n: (10, 10, static),
+        node=0,
+        baseline_hash=base,
+        interval=0,
+        timeout=0.05,
+        mode="event",
+        wait_fn=lambda _b: False,
+        note_fn=notes.append,
+    )
+    assert changed is False
+    assert notes == ["timeouts"]

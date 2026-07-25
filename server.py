@@ -253,11 +253,24 @@ def tool_screenshot(args):
             # stale capture on a static monitor — a successful scroll/click is now SEEN), then
             # settle to a steady end state. If no baseline, fall back to stable-settle alone.
             if base is not None and base_node == node:
+                # Probe A/B: arm the damage waiter BEFORE the first grab and re-arm on every
+                # wake, so the grab->wait window is always covered and no damage is missed.
+                # Inert in the default 'poll' mode.
+                armed = {"ev": capture.arm_damage(node)}
+
+                def _wait_damage(budget, _n=node, _a=armed):
+                    ok = capture.wait_damage(_a["ev"], budget)
+                    _a["ev"] = capture.arm_damage(_n)
+                    return ok
+
                 changed, _ = reliability.wait_for_changed_frame(
                     lambda n: capture.grab(n),
                     node,
                     base,
                     timeout=min(MAX_WAIT_MS / 1000.0, 2.5),
+                    mode=capture.WAIT_MODE,
+                    wait_fn=_wait_damage,
+                    note_fn=capture.note_wake,
                 )
             _settle(node, timeout=min(MAX_WAIT_MS / 1000.0, 2.0))
         except Exception:
@@ -1155,6 +1168,27 @@ TOOLS = [
         },
     },
     {
+        "name": "screen_read_selection",
+        "title": "Read Selection (Exact Text)",
+        "annotations": _ACT,
+        "description": "Copy the FOCUSED window's selection and return it verbatim — the lossless way to read text. Prefer this over screenshot+OCR whenever you need characters to be exact: a full-monitor shot downscales 4K to 2576px and drops ~8% of characters on small code, while a copy is exact and ~100x faster than an annotate pass. Select first (click/drag, or select_all:true). combo defaults to ctrl+c — TERMINALS need combo='ctrl+shift+c'. The user's clipboard is saved and restored. Returns the selected text.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "select_all": {
+                    "type": "boolean",
+                    "description": "send ctrl+a first to grab the whole buffer",
+                },
+                "combo": {
+                    "type": "string",
+                    "description": "copy combo; default 'ctrl+c', terminals need 'ctrl+shift+c'",
+                },
+                "focus": _FOCUS,
+                "force": _FORCE,
+            },
+        },
+    },
+    {
         "name": "screen_focus",
         "title": "Focus Window",
         "annotations": _ACT,
@@ -1308,6 +1342,9 @@ HANDLERS = {
     "screen_drag": lambda a: _action("screen_drag", inp.drag, a),
     "screen_key": lambda a: _action("screen_key", inp.key, a),
     "screen_type": lambda a: _action("screen_type", inp.type_text, a),
+    "screen_read_selection": lambda a: _action(
+        "screen_read_selection", inp.read_selection, a
+    ),
     "screen_focus": tool_focus,
     "screen_do": tool_do,
     "screen_tour": tool_tour,

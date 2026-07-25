@@ -101,7 +101,16 @@ def mean_abs_diff(a, b):
     return float(diff.mean())
 
 
-def wait_for_changed_frame(grab_fn, node, baseline_hash, interval=0.06, timeout=2.5):
+def wait_for_changed_frame(
+    grab_fn,
+    node,
+    baseline_hash,
+    interval=0.06,
+    timeout=2.5,
+    mode="poll",
+    wait_fn=None,
+    note_fn=None,
+):
     """Poll grab_fn(node)[2] until its frame_hash DIFFERS from baseline_hash, or timeout.
 
     This is the anti-stale primitive for a damage-driven (static) monitor: after an action,
@@ -109,9 +118,19 @@ def wait_for_changed_frame(grab_fn, node, baseline_hash, interval=0.06, timeout=
     and a keepalive resend carries old pixels with a fresh timestamp — so neither stability nor
     PTS proves the capture reflects the action. A changed pixel-hash does. Returns
     (changed: bool, last_hash). On timeout returns (False, last_hash) so the caller still
-    proceeds with whatever frame it has."""
+    proceeds with whatever frame it has.
+
+    `mode` selects the wake source (probes A/B). 'poll' is the default and is byte-identical
+    to the original loop. 'event'/'hybrid' block on `wait_fn(remaining)` — an injected damage
+    waiter — so no frame is grabbed or converted until damage actually lands; 'hybrid' still
+    honours `interval` as a backstop so an absent event degrades to polling, never to a stall.
+    `wait_fn`/`note_fn` are INJECTED (this module must not import capture — the grabber and now
+    the waiter both come from the caller). Falls back to polling if no waiter is supplied."""
     deadline = time.monotonic() + timeout
     last = baseline_hash
+    # Narrow to the callable itself, not a bool — a separate `evented` flag reads as
+    # Optional at the call site below and is a real None-call risk, not just a type nit.
+    waiter = wait_fn if mode in ("event", "hybrid") else None
     while True:
         try:
             last = frame_hash(grab_fn(node)[2])
@@ -120,9 +139,23 @@ def wait_for_changed_frame(grab_fn, node, baseline_hash, interval=0.06, timeout=
             return False, last
         if last != baseline_hash:
             return True, last
-        if time.monotonic() >= deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            if note_fn:
+                note_fn("timeouts")
             return False, last
-        time.sleep(interval)
+        if waiter is None:
+            time.sleep(min(interval, remaining))
+            continue
+        # Block for damage instead of burning a grab+convert+hash per interval. In hybrid the
+        # wait is capped at `interval` so the loop still re-checks on its own if no event comes.
+        budget = min(remaining, interval) if mode == "hybrid" else remaining
+        if waiter(budget):
+            if note_fn:
+                note_fn("event_wakes")
+        elif mode == "hybrid":
+            if note_fn:
+                note_fn("backstop_fires")
 
 
 def wait_for_stable_frame(

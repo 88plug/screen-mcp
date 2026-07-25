@@ -27,6 +27,8 @@ import base64
 import ctypes
 import platform
 import threading
+import collections
+import statistics
 
 import gi
 
@@ -39,6 +41,16 @@ from PIL import Image, ImageDraw  # noqa: E402
 import state  # noqa: E402
 
 LANCZOS = Image.Resampling.LANCZOS
+
+# WebP lossless encode effort. libwebp's `method` (0-6) and `quality` (compression EFFORT in
+# lossless mode, not fidelity) only trade CPU for bytes — the pixels are identical at every
+# setting. Measured on a real 2576x1449 desktop frame: method=4 (Pillow's default, what we
+# shipped) 3755ms/429KB vs method=0 quality=20 195ms/569KB — 19x faster for 140KB more.
+# The extra bytes are free: an image costs ceil(w/28)*ceil(h/28) visual tokens (4784 here)
+# regardless of encoded size, and 759KB of base64 is nowhere near the API's 10MB per-image
+# cap. Encode was 85% of a plain screenshot's wall time, so this is the whole latency win.
+WEBP_METHOD = int(os.environ.get("MCP_SCREEN_WEBP_METHOD", "0"))
+WEBP_EFFORT = int(os.environ.get("MCP_SCREEN_WEBP_EFFORT", "20"))
 
 # Gst.init is binding-version-fragile: older PyGObject accepts None; GStreamer/
 # gobject-introspection >= 1.28 rejects it ("Argument 1 does not allow None as a
@@ -258,6 +270,173 @@ class _PyWrap(
 # the source rather than off the appsink sample.
 _CURSOR = {}
 
+# --- Probe C: INSTRUMENT ONLY, no behavior change -----------------------------------------
+# Question: does PipeWire damage arrive densely enough to WAKE on (block on a buffer), or is
+# the 1fps poll in screen_wait/screen_watch load-bearing? Recorded at the SOURCE pad, so the
+# arrival time is independent of when we happen to pull. The probe returns OK untouched and
+# only appends to bounded deques; the JSONL sink is opt-in.
+#
+# keepalive-time=1000 re-sends the LAST buffer, which also fires this probe — so raw arrivals
+# would falsely read as "events flow" on a static monitor. A resend pushes the SAME GstBuffer,
+# so an unchanged underlying pointer marks a resend and only pointer CHANGES count as damage.
+# That separation is the whole point of the probe; do not collapse it back to raw arrivals.
+#
+# Probes A/B ride the same pad probe. MCP_SCREEN_WAIT_MODE selects how the post-action
+# change-gate waits:
+#   poll   (default, unchanged) — grab+convert+hash every `interval`
+#   event  (Probe A) — block on real damage only; no grab until damage lands
+#   hybrid (Probe B) — block on damage, but a poll floor still fires as a backstop, so a
+#                      missed/absent damage event degrades to today's behavior instead of
+#                      a stall. backstop_fires > 0 is the signal that events alone are NOT
+#                      a sufficient wake source.
+WAIT_MODE = os.environ.get("MCP_SCREEN_WAIT_MODE", "poll").strip().lower()
+if WAIT_MODE not in ("poll", "event", "hybrid"):
+    WAIT_MODE = "poll"
+EVENT_LOG_N = int(os.environ.get("MCP_SCREEN_EVENT_LOG_N", "512"))
+EVENT_LOG_OFF = os.environ.get("MCP_SCREEN_NO_EVENT_LOG") == "1"
+EVENT_LOG_PATH = os.environ.get("MCP_SCREEN_EVENT_LOG") or None
+_ARRIVALS = {}  # node -> deque[(t_mono, pts_ns, buf_ptr)]
+_PULLS = {}  # node -> deque[(t_mono, got_sample, content_changed)]
+# Resend detection and the damage Event are kept OUT of the log deques: probes A/B must keep
+# working with the Probe C log disabled.
+_LAST_PTR = {}  # node -> last GstBuffer address seen at the source pad
+_DAMAGE_EV = {}  # node -> threading.Event, set on a NON-resend buffer
+# Probe A/B counters: event_wakes = woken by real damage; backstop_fires = the hybrid poll
+# floor fired because no damage event arrived (a NEGATIVE signal for event-only waiting).
+_WAIT_STATS = {"event_wakes": 0, "backstop_fires": 0, "timeouts": 0}
+
+
+def _jsonl(rec):
+    """Append one record to the opt-in Probe C log. Never raises; a broken log must not
+    break capture."""
+    if not EVENT_LOG_PATH:
+        return
+    try:
+        with open(EVENT_LOG_PATH, "a") as fh:
+            fh.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
+
+
+def _note_arrival(node_id, buf):
+    """Record a buffer arriving at the source pad, tagging keepalive resends, and wake any
+    waiter armed on this node when the buffer is real damage."""
+    try:
+        ptr = _PyWrap.from_address(id(buf)).obj
+        resend = _LAST_PTR.get(node_id) == ptr
+        _LAST_PTR[node_id] = ptr
+        t = time.monotonic()
+        if not resend:
+            ev = _DAMAGE_EV.get(node_id)
+            if ev is not None:
+                ev.set()
+        if EVENT_LOG_OFF:
+            return
+        _ARRIVALS.setdefault(node_id, collections.deque(maxlen=EVENT_LOG_N)).append(
+            (t, buf.pts, ptr)
+        )
+        _jsonl({"ev": "arrive", "node": node_id, "t": t, "resend": resend})
+    except Exception:
+        pass
+
+
+def arm_damage(node_id):
+    """Arm a damage waiter for this node and return it. Must be called BEFORE the caller
+    takes its baseline frame, else damage landing in between is lost."""
+    ev = _DAMAGE_EV.setdefault(node_id, threading.Event())
+    ev.clear()
+    return ev
+
+
+def wait_damage(ev, timeout):
+    """Block up to `timeout` seconds for real damage on an armed node. True = damage arrived.
+
+    Probe A/B primitive: waiting here costs nothing, whereas each poll iteration pays a full
+    grab + 4K RGBA convert + hash. Never raises."""
+    try:
+        return bool(ev.wait(timeout))
+    except Exception:
+        return False
+
+
+def note_wake(kind):
+    """Count a Probe A/B wake outcome: event_wakes | backstop_fires | timeouts."""
+    if kind in _WAIT_STATS:
+        _WAIT_STATS[kind] += 1
+
+
+def _note_pull(node_id, got, changed):
+    """Record a grab() pulling from the appsink — the poll side of the comparison."""
+    if EVENT_LOG_OFF:
+        return
+    try:
+        t = time.monotonic()
+        _PULLS.setdefault(node_id, collections.deque(maxlen=EVENT_LOG_N)).append(
+            (t, bool(got), bool(changed))
+        )
+        _jsonl(
+            {
+                "ev": "pull",
+                "node": node_id,
+                "t": t,
+                "got": bool(got),
+                "changed": bool(changed),
+            }
+        )
+    except Exception:
+        pass
+
+
+def _pct(vals, p):
+    if not vals:
+        return None
+    s = sorted(vals)
+    return round(s[min(len(s) - 1, int(p * len(s)))], 1)
+
+
+def event_stats():
+    """Probe C readout, per node. `damage_*` EXCLUDES keepalive resends, so the gaps describe
+    real screen change. `wake_headroom_ms` is the lag from a damage arrival to the next pull
+    that actually saw new content — the latency an event-driven wait could remove."""
+    out = {"wait_mode": WAIT_MODE, "waits": dict(_WAIT_STATS), "nodes": {}}
+    nodes = out["nodes"]
+    for nid, arr in _ARRIVALS.items():
+        ev = list(arr)
+        dmg = [ev[i][0] for i in range(len(ev)) if i == 0 or ev[i][2] != ev[i - 1][2]]
+        # Cross-check on the resend discriminator: if the GstBuffer pointer always differs but
+        # the PTS repeats, pipewiresrc is re-pushing the same frame under a fresh buffer and the
+        # pointer test is blind to it. Both counters near zero while gaps stay capped at the
+        # keepalive period means the discriminator is wrong, not that the screen is busy.
+        pts_repeats = sum(1 for a, b in zip(ev, ev[1:]) if a[1] == b[1])
+        gaps = [(b - a) * 1000.0 for a, b in zip(dmg, dmg[1:])]
+        pulls = list(_PULLS.get(nid, ()))
+        head = []
+        for t, got, changed in pulls:
+            if not (got and changed):
+                continue
+            prior = [d for d in dmg if d <= t]
+            if prior:
+                head.append((t - prior[-1]) * 1000.0)
+        nodes[nid] = {
+            "arrivals": len(ev),
+            "damage": len(dmg),
+            "resends": len(ev) - len(dmg),
+            "pts_repeats": pts_repeats,
+            "damage_gap_ms": {
+                "median": round(statistics.median(gaps), 1) if gaps else None,
+                "p95": _pct(gaps, 0.95),
+                "max": round(max(gaps), 1) if gaps else None,
+            },
+            "last_damage_age_s": round(time.monotonic() - dmg[-1], 2) if dmg else None,
+            "pulls": len(pulls),
+            "pulls_changed": sum(1 for _, g, c in pulls if g and c),
+            "wake_headroom_ms": {
+                "median": round(statistics.median(head), 1) if head else None,
+                "p95": _pct(head, 0.95),
+            },
+        }
+    return out
+
 
 def _cursor_xy_from_buf(buf):
     """Read the 'cursor' ROI meta (x,y in stream frame px) off a GstBuffer, or None."""
@@ -286,7 +465,9 @@ def _cursor_xy_from_buf(buf):
 def _cursor_probe(pad, info, node_id):
     """pipewiresrc src-pad buffer probe: stash the latest cursor position for this node."""
     try:
-        xy = _cursor_xy_from_buf(info.get_buffer())
+        buf = info.get_buffer()
+        _note_arrival(node_id, buf)
+        xy = _cursor_xy_from_buf(buf)
         if xy is not None:
             # Reject out-of-frame cursor metas: a stale/garbage ROI value (e.g. x beyond the
             # stream width, seen when a monitor goes static) must not poison the cache and
@@ -364,6 +545,7 @@ def diag():
         "probe_cache": cache,
         "cursor_pos": cursor_pos(),
         "last_nudge_result": dict(_NUDGE_DEBUG),
+        "events": event_stats(),
     }
 
 
@@ -407,14 +589,16 @@ def grab(node_id, rebuild=True):
         sink = _get_sink(node_id)
         sample = sink.emit("try-pull-sample", 5 * Gst.SECOND) or sink.props.last_sample
     if sample is None:
+        _note_pull(node_id, False, False)
         raise RuntimeError(
             f"no frame from node {node_id} (monitor may be off, or ON-but-static — GNOME "
             f"streams on damage, so an idle screen emits no frame until something changes)"
         )
     w, h, arr = _sample_to_rgba(sample)
-    _note_frame(
+    changed = _note_frame(
         node_id, arr
     )  # track freshness so screenshots can flag a possibly-stale frame
+    _note_pull(node_id, True, changed)
     return w, h, arr
 
 
@@ -611,16 +795,19 @@ STALE_AGE_S = float(
 
 
 def _note_frame(node_id, arr):
-    """Record when this node's frame content last changed (freshness). Cheap; never raises."""
+    """Record when this node's frame content last changed (freshness). Returns whether the
+    content changed (Probe C reads it). Cheap; never raises."""
     try:
         sig = _sig(arr)
     except Exception:
-        return
+        return False
     if sig != _CHG_SIG.get(node_id):
         _CHG_SIG[node_id] = sig
         _LAST_CHANGE_T[node_id] = time.monotonic()
-    elif node_id not in _LAST_CHANGE_T:
+        return True
+    if node_id not in _LAST_CHANGE_T:
         _LAST_CHANGE_T[node_id] = time.monotonic()
+    return False
 
 
 def frame_age(node_id):
@@ -1002,7 +1189,13 @@ def encode_store(img, ox, oy, label, t0, max_edge=None):
     if max_edge and me < state.MAX_EDGE:
         out.convert("RGB").save(buf, format="WEBP", quality=80, method=4)
     else:
-        out.convert("RGBA").save(buf, format="WEBP", lossless=True)
+        out.convert("RGBA").save(
+            buf,
+            format="WEBP",
+            lossless=True,
+            method=WEBP_METHOD,
+            quality=WEBP_EFFORT,
+        )
     raw = buf.getvalue()
     ms = int((time.time() - t0) * 1000)
     txt = (

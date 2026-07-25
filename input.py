@@ -775,6 +775,66 @@ def key(args):
     return _ok(f"pressed {combo}")
 
 
+def read_selection(a):
+    """Copy the focused window's current selection and return it VERBATIM.
+
+    The lossless read path. OCR sees a 4K frame downscaled to 2576px, which measurably drops
+    ~8% of characters on sub-12px code (and costs seconds of grounding); a copy is exact and
+    costs milliseconds. Select in the app first (click, drag, or select_all=True), then call
+    this instead of screenshotting text you need character-accurate.
+
+    `combo` defaults to ctrl+c — TERMINALS need ctrl+shift+c, where a bare ctrl+c sends SIGINT
+    to the foreground process instead of copying. Pass it explicitly for terminal windows.
+
+    THE CLIPBOARD IS CLEARED BEFORE THE COMBO IS SENT, and that is load-bearing, not tidiness.
+    Reading it without clearing cannot distinguish "the app copied a selection" from "the app
+    ignored the combo and the clipboard still holds what it held before" — the first live test
+    of this tool hit exactly that: a TUI swallowed the drag so no selection existed, the copy
+    was a no-op, and the caller got the user's PRIOR clipboard contents returned as though they
+    had been read off the screen. Clearing first makes an empty read unambiguous proof that
+    nothing was copied. The user's clipboard is saved and restored in a `finally` regardless."""
+    if not shutil.which("wl-paste") or not shutil.which("wl-copy"):
+        return _ok("clipboard read unavailable: wl-clipboard not installed")
+    combo = str(a.get("combo") or "ctrl+c")
+    prev = None
+    try:
+        r = subprocess.run(["wl-paste", "--no-newline"], capture_output=True, timeout=2)
+        if r.returncode == 0:
+            prev = r.stdout
+    except Exception:
+        prev = None
+    try:
+        # Clear FIRST so a stale clipboard can never masquerade as a fresh copy.
+        subprocess.run(["wl-copy", "--clear"], timeout=2)
+        GLib.usleep(40000)
+        if a.get("select_all"):
+            key({"keys": "ctrl+a"})
+            GLib.usleep(60000)
+        key({"keys": combo})
+        GLib.usleep(140000)  # let the app put it on the clipboard before we read
+        r = subprocess.run(["wl-paste", "--no-newline"], capture_output=True, timeout=2)
+        got = r.stdout.decode("utf-8", "replace") if r.returncode == 0 else ""
+    except Exception as ex:  # noqa: BLE001 — fail-open like the rest of the input path
+        return _ok(f"clipboard read failed: {ex}")
+    finally:
+        try:  # ALWAYS restore — the app's text must not outlive this call
+            if prev is not None:
+                subprocess.run(["wl-copy"], input=prev, timeout=2)
+            else:
+                subprocess.run(["wl-copy", "--clear"], timeout=2)
+        except Exception:
+            pass
+    if not got.strip():
+        return _ok(
+            f"NOTHING COPIED via {combo} — the clipboard was empty after the combo, so no "
+            f"selection was taken (nothing selected, or the app ignores that combo). "
+            f"Terminals need combo='ctrl+shift+c'; a TUI that grabs the mouse (Claude Code, "
+            f"vim, htop) swallows drag-select, so hold Shift while dragging to force a real "
+            f"terminal selection. Read the screen instead if that fails."
+        )
+    return _ok(f"selection ({len(got)} chars, exact — no OCR):\n{got}")
+
+
 def _clip_paste(text):
     """Set the Wayland clipboard to `text`, paste it with Ctrl+V, then restore the prior
     clipboard. This is how we type UNICODE: the per-char keysym path can't emit non-ASCII

@@ -119,6 +119,27 @@ Type text (Unicode ok via clipboard paste; ASCII via keysyms). `enter=true` pres
 | `focus` | string | Raise + focus before type |
 | `shot`, `verify`, `force`, `region`, `settle` | | |
 
+### `screen_read_selection` — Read Selection (Exact Text) (ACT)
+
+Copy the **focused** window's current selection and return it verbatim. Prefer this over
+screenshot + OCR whenever characters must be exact: a full-monitor shot downscales 4K to
+2576 px and measurably drops ~8% of characters on sub-12px code, while a copy is lossless
+and skips the grounding pass entirely.
+
+Select first (click/drag, or `select_all=true`). The clipboard is **cleared before** the
+combo is sent, so an empty read proves nothing was copied rather than silently returning
+whatever the clipboard already held. The user's clipboard is saved and restored either way.
+
+| Arg | Type | Notes |
+|---|---|---|
+| `select_all` | bool | Send `ctrl+a` first to grab the whole buffer |
+| `combo` | string | Copy combo; default `ctrl+c`. **Terminals need `ctrl+shift+c`** |
+| `focus` | string | Raise + focus before copying |
+| `force` | bool | Bypass the takeover guard |
+
+Needs `wl-clipboard`. A TUI that grabs the mouse (Claude Code, vim, htop) swallows
+drag-select — hold Shift while dragging to force a real terminal selection.
+
 ### `screen_focus` — Focus Window (ACT)
 
 Raise and give **keyboard focus** to a window so injected keys/clicks land in it. Use before `screen_type` / `screen_key` on an app you have not clicked into (the #1 reason typing appears to do nothing).
@@ -205,6 +226,7 @@ Return the normalized change signal from the most recent frame diff — `{change
 | `screen_drag` | Drag | ACT |
 | `screen_key` | Press Key | ACT |
 | `screen_type` | Type Text | ACT |
+| `screen_read_selection` | Read Selection (Exact Text) | ACT |
 | `screen_focus` | Focus Window | ACT |
 | `screen_do` | Batch Actions | DEST |
 | `screen_read_page` | Read Page | ACT |
