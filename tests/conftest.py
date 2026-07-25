@@ -1,20 +1,47 @@
 """pytest scaffolding for mcp-screen.
 
-The runtime modules (state.py, capture.py, input.py) import gi.repository at module top
-and state.py also opens a D-Bus session bus at import time. Tests of the pure-math
-helpers must NOT require a live GNOME session, so we install lightweight stubs into
-sys.modules BEFORE any test module triggers the heavy imports.
+REAL-FIRST. The runtime modules (state.py, capture.py, input.py) import gi.repository at
+module top and state.py opens a D-Bus session bus at import. Stubs let the pure-math tests
+run headless — but a stub that ALWAYS wins means the shipped code is never executed by the
+suite. Every capture bug this session (a read-only ndarray aliasing an unmapped GstBuffer, a
+missed rename, a handler returning a bare str where the dispatcher indexes ["content"]) was
+caught by driving the real desktop, because the tests could not reach that code at all.
 
-Real-environment tests (e.g. test_recorder.py) don't need these stubs — recorder.py
-touches neither gi nor state. Tests that DO want to exercise a particular fake (e.g.
-input._clip_paste interactions) monkey-patch on top of these defaults inside the test."""
+So: try the real modules first, and install a stub ONLY for what genuinely will not import
+here. `REAL_STACK` records the outcome so tests can gate on it — real coverage where a
+desktop stack exists, clean skips in CI where it does not.
+"""
 
 import sys
 import types
 from typing import Any, cast
 
+#: True when the real gi/GStreamer stack imported — set by _install_gi_stub().
+REAL_STACK = False
+
+
+def _real_gi_available():
+    """Can we import the genuine gi + Gst + a live session bus? Only then is it safe to let
+    tests touch capture/state for real."""
+    try:
+        import gi  # noqa: F401
+
+        gi.require_version("Gst", "1.0")
+        gi.require_version("Gio", "2.0")
+        from gi.repository import Gio, Gst  # noqa: F401
+
+        Gst.init(None if Gst.is_initialized() else [])
+        Gio.bus_get_sync(Gio.BusType.SESSION, None)  # state.py does this at import
+        return True
+    except Exception:
+        return False
+
 
 def _install_gi_stub():
+    global REAL_STACK
+    if _real_gi_available():
+        REAL_STACK = True
+        return  # real gi/Gst/D-Bus present — do not shadow the shipped code
     if "gi" in sys.modules and "gi.repository" in sys.modules:
         return
     gi = cast(Any, types.ModuleType("gi"))
@@ -51,7 +78,7 @@ def _install_gi_stub():
 
 
 def _install_state_stub():
-    if "state" in sys.modules:
+    if REAL_STACK or "state" in sys.modules:
         return
     state = cast(Any, types.ModuleType("state"))
     state.SESSION = {}
@@ -63,7 +90,7 @@ def _install_state_stub():
 
 def _install_capture_stub():
     """input.guard_user does a lazy `import capture`; stub it so importing input is enough."""
-    if "capture" in sys.modules:
+    if REAL_STACK or "capture" in sys.modules:
         return
     cap = cast(Any, types.ModuleType("capture"))
     cap.cursor_pos = lambda *_a, **_kw: None

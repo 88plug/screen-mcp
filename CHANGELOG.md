@@ -15,6 +15,26 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **Test harness is REAL-FIRST — the suite now executes capture.py instead of a stub.**
+  `tests/conftest.py` unconditionally installed stub `gi`/`state`/`capture` modules into
+  `sys.modules`, so 144 passing tests never ran a line of the shipped capture path. Every
+  capture bug this session was caught by driving the real desktop instead: an ndarray
+  aliasing an unmapped GstBuffer (read-only + use-after-free), a missed `_sample_to_rgba`
+  rename, and a handler returning a bare `str` where the dispatcher indexes `["content"]`.
+  conftest now probes for real gi + Gst + a session bus and only stubs what genuinely will
+  not import, exposing `REAL_STACK` so tests can gate. New `tests/test_capture_real.py`
+  covers the real `_sample_to_rgb` (exact pixels, row-padding stride trim, and that the
+  result is writable and owns its data), `_downscale` incl. the PIL fallback, and a
+  **view-transform round-trip** — the click-accuracy invariant, previously untested.
+  150 pass locally against the real stack; 144 pass + 6 skip in CI where gi is absent.
+
+  The new tests were mutation-checked rather than assumed: reintroducing the alias bug fails
+  2, adding a broken stride trim fails 3, and forcing the view transform to 1:1 fails 4.
+
+  Re-ran legibility end-to-end through the real `encode_store` (real downscale, real WebP
+  settings, real transform) rather than an offline approximation: 92% mean / 91% across the
+  three smallest fonts — matching the offline cv2 INTER_AREA figures exactly.
+
 - **Screenshot downscale moved to cv2 INTER_AREA — 15x faster than PIL LANCZOS.**
   287.5ms → 18.8ms on a real 3840x2160 → 2576x1449 frame; live shot 528ms → 412ms with
   the resize stage at 84ms (was 408ms two commits ago). INTER_AREA is also the principled
