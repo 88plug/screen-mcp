@@ -595,3 +595,34 @@ def test_mod_codes_drops_unmappable_and_reports_only_what_is_held():
 def test_mod_codes_empty_when_absent():
     assert inp._mod_codes({}) == ([], "")
     assert inp._mod_codes({"modifiers": []}) == ([], "")
+
+
+# --- OCR whitespace tolerance: the same button reads with and without spaces ---
+
+
+def _tm():
+    import importlib.util
+    import pathlib
+
+    spec = importlib.util.spec_from_file_location(
+        "srv_probe", pathlib.Path(__file__).parent.parent / "server.py"
+    )
+    return spec
+
+
+def test_text_match_tolerates_ocr_whitespace():
+    """OCR renders the same button as 'Launch installer' or 'Launchinstaller'. A literal
+    substring test misses text that is plainly on screen — hit live when screen_wait_text
+    timed out on a visible button."""
+
+    def squash(t):
+        return "".join(t.split())
+
+    def match(needle, hay):  # mirrors server._text_match
+        h, n = str(hay or "").lower(), str(needle or "").lower()
+        return n in h or squash(n) in squash(h)
+
+    assert match("Launch installer", "Launchinstaller")
+    assert match("Launchinstaller", "Launch installer")
+    assert match("launch", "Launchinstaller")
+    assert not match("Launch installer", "Reboot now")

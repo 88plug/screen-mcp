@@ -120,6 +120,7 @@ annotated shot.
 | `screen_key` | Press a key or combo, e.g. `Ctrl+L`, `Enter`, `Alt+Tab`. |
 | `screen_type` | Type text into the focused window (Unicode via clipboard paste, ASCII via keysyms). |
 | `screen_read_text` | Read the screen as text + click coords, no image (3.5x-50x fewer tokens). |
+| `screen_wait_text` | Block until text appears, then return its click coords. |
 | `screen_read_selection` | Copy the focused window's selection and return it verbatim — exact text, no OCR. |
 | `screen_focus` | Raise and give keyboard focus to a window by app/title/id. |
 | `screen_do` | Run a batch of ordered actions in one call. |

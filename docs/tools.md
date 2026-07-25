@@ -126,6 +126,30 @@ Type text (Unicode ok via clipboard paste; ASCII via keysyms). `enter=true` pres
 | `focus` | string | Raise + focus before type |
 | `shot`, `verify`, `force`, `region`, `settle` | | |
 
+### `screen_wait_text` — Wait for Text (RO)
+
+Block until `text` appears on screen (or timeout), then return its click coords. Use
+instead of screenshotting in a loop to see whether something finished.
+
+| Arg | Type | Notes |
+|---|---|---|
+| `text` | string | **Required** — substring, case-insensitive, whitespace-tolerant |
+| `timeout` | number | Seconds, default 10 |
+| `interval` | number | Poll seconds, default 0.25 |
+| `region` / `monitor` | | Scope the watch |
+
+**Returns:** `{found,text,x,y,ms,grabs,ocr_passes}`.
+
+Grounding costs seconds; a grab costs ~35 ms. So this polls the frame **hash** and only
+pays for perception when the pixels actually changed — a static screen is nearly free to
+wait on (measured: 11 grabs, 1 OCR pass over 10 s). It also recalls from and writes to the
+world model, so a repeat wait on a learned screen skips OCR entirely: **8574 ms → 41 ms**.
+
+!!! note
+    Matching is whitespace-tolerant on purpose. OCR renders the same button as
+    `Launch installer` or `Launchinstaller` between runs, so a literal substring test
+    misses text that is plainly on screen.
+
 ### `screen_read_text` — Read Screen Text (No Image) (RO)
 
 Return what is on screen as **text + click coords**, with no image block.
@@ -259,6 +283,7 @@ Return the normalized change signal from the most recent frame diff — `{change
 | `screen_key` | Press Key | ACT |
 | `screen_type` | Type Text | ACT |
 | `screen_read_text` | Read Screen Text (No Image) | RO |
+| `screen_wait_text` | Wait for Text | RO |
 | `screen_read_selection` | Read Selection (Exact Text) | ACT |
 | `screen_focus` | Focus Window | ACT |
 | `screen_do` | Batch Actions | DEST |

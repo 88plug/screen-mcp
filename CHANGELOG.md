@@ -15,6 +15,20 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **New `screen_wait_text` — block until text appears, then return its click coords.**
+  Replaces screenshotting in a loop to see whether something finished. Naive polling was a
+  non-starter (grounding costs ~7.7s on a cold screen), so it uses the shape this session
+  measured: a grab is ~35ms while OCR is the expensive part, so it polls the frame HASH and
+  only pays for perception when pixels actually changed — measured 11 grabs / 1 OCR pass
+  over a 10s wait on a static screen. It also recalls from **and writes to** the world model,
+  so a repeat wait on a learned screen skips OCR entirely: **8574ms → 41ms (209x)**.
+  (Steal from QuickDesk's `wait_for_text`.)
+
+- **OCR matching is whitespace-tolerant in `screen_wait_text` and `screen_read_text`.**
+  Found by the first eval of wait_text, which timed out on a button that was plainly on
+  screen: OCR renders it `Launch installer` or `Launchinstaller` depending on the run, so a
+  literal substring test misses it. Both tools now compare raw and whitespace-stripped.
+
 - **New `screen_read_text` — read the screen as text + click coords, no image.** Every
   latency win this session left the token cost untouched: an image bills a FIXED
   `ceil(w/28)*ceil(h/28)` visual tokens (4784 for a 4K monitor) regardless of how small the

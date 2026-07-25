@@ -57,6 +57,8 @@ import json
 import time
 
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # hard no-GPU: grounding is CPU-only
+import numpy as np
+
 import state
 import capture
 import input as inp
@@ -410,6 +412,149 @@ def tool_screenshot(args):
     return {"content": content}
 
 
+def _text_match(needle, hay):
+    """Substring match that tolerates OCR whitespace. OCR joins and drops spaces
+    unpredictably — the same button reads "Launch installer" or "Launchinstaller" run to
+    run — so a literal `in` test misses text that is plainly on screen. Compare both raw
+    and whitespace-stripped; found live when wait_text timed out on a visible button."""
+    h = str(hay or "").lower()
+    n = str(needle or "").lower()
+    if n in h:
+        return True
+
+    def squash(t):
+        return "".join(t.split())
+
+    return squash(n) in squash(h)
+
+
+def tool_wait_text(args):
+    """Block until `text` appears on screen, or timeout. Returns its click coords.
+
+    Naive polling would be useless here: grounding costs ~7.7s on a cold screen, so an
+    OCR-per-iteration loop cannot poll at any useful rate. The measured shape of this
+    system makes it cheap instead — a grab is ~35ms while OCR is the expensive part — so
+    this polls the frame HASH and only pays for perception when the pixels actually
+    changed. On a static screen the loop costs a grab; on a changing one it costs one OCR
+    per distinct frame.
+
+    Use instead of screenshotting in a loop to see whether something finished."""
+    t0 = time.time()
+    state.stage_reset()
+    needle = str(args.get("text") or "").strip()
+    if not needle:
+        return {"content": [_txt("wait_text: `text` is required")], "isError": True}
+    timeout = min(MAX_WAIT_MS / 1000.0, float(args.get("timeout", 10)))
+    interval = max(0.05, float(args.get("interval", 0.25)))
+    region, monitor = args.get("region"), args.get("monitor")
+    deadline = time.monotonic() + timeout
+    last_hash, ocr_passes, grabs = None, 0, 0
+    try:
+        aware = awareness.summary()  # cached; part of the world-model recall key
+    except Exception:
+        aware = "unavailable"
+    while True:
+        try:
+            with state.stage("capture"):
+                img, ox, oy = capture.capture_desktop(region, monitor, fresh=False)
+            grabs += 1
+        except RuntimeError as e:
+            return {"content": [_txt(f"wait_text: {e}")], "isError": True}
+        h = reliability.frame_hash(np.asarray(img))
+        if h != last_hash:  # pixels moved — only now is perception worth paying for
+            last_hash = h
+            # World-model recall before OCR. It is dHash-keyed, so it can only hit on a
+            # screen we have already learned — a screen we are still WAITING to change
+            # cannot match, which is what makes this safe here. Turns "the text is already
+            # there" from a ~7.2s OCR into ~50ms.
+            hit = worldmodel.MAP.recall(img, aware, [ox, oy, img.width, img.height])
+            if hit:
+                found = [
+                    {
+                        "label": v.get("label"),
+                        "role": v.get("role"),
+                        "abs": (v["x"], v["y"]),
+                    }
+                    for v in hit["elements"].values()
+                ]
+            else:
+                ocr_passes += 1
+                try:
+                    with state.stage("ground"):
+                        _m, raw_found = grounding.annotate(img)
+                except Exception:
+                    raw_found = []
+                found = [
+                    {
+                        "label": e.get("label"),
+                        "role": e.get("role"),
+                        "abs": (
+                            ox + (e["bbox"][0] + e["bbox"][2]) // 2,
+                            oy + (e["bbox"][1] + e["bbox"][3]) // 2,
+                        ),
+                    }
+                    for e in raw_found
+                ]
+                # LEARN it. Reading the cache without ever writing it means this loop can
+                # never warm up: a second wait on the same screen re-pays the full OCR.
+                try:
+                    worldmodel.MAP.observe(
+                        img,
+                        {
+                            e["id"]: {
+                                "x": ox + (e["bbox"][0] + e["bbox"][2]) // 2,
+                                "y": oy + (e["bbox"][1] + e["bbox"][3]) // 2,
+                                "label": e.get("label"),
+                                "role": e.get("role"),
+                            }
+                            for e in raw_found
+                        },
+                        aware,
+                        [ox, oy, img.width, img.height],
+                    )
+                except Exception:
+                    pass
+            for e in found:
+                if _text_match(needle, e.get("label")):
+                    cx, cy = e["abs"]
+                    ms = int((time.time() - t0) * 1000)
+                    body = json.dumps(
+                        {
+                            "found": True,
+                            "text": e.get("label"),
+                            "role": e.get("role"),
+                            "x": cx,
+                            "y": cy,
+                            "ms": ms,
+                            "grabs": grabs,
+                            "ocr_passes": ocr_passes,
+                        },
+                        separators=(",", ":"),
+                    )
+                    out = [_txt(body)]
+                    sl = state.stage_line(ms)
+                    if sl:
+                        out.append(_txt(sl))
+                    return {"content": out}
+        if time.monotonic() >= deadline:
+            ms = int((time.time() - t0) * 1000)
+            body = json.dumps(
+                {
+                    "found": False,
+                    "waited_ms": ms,
+                    "grabs": grabs,
+                    "ocr_passes": ocr_passes,
+                },
+                separators=(",", ":"),
+            )
+            out = [_txt(f"{body}\ntimed out — {needle!r} never appeared")]
+            sl = state.stage_line(ms)
+            if sl:
+                out.append(_txt(sl))
+            return {"content": out}
+        time.sleep(interval)
+
+
 def tool_read_text(args):
     """Return what is ON the screen as TEXT — no image block.
 
@@ -487,8 +632,8 @@ def tool_read_text(args):
         except Exception as ex:  # noqa: BLE001 — perception is fail-open everywhere else
             return {"content": [_txt(f"read_text failed: {ex}")], "isError": True}
     if args.get("contains"):
-        needle = str(args["contains"]).lower()
-        elements = [e for e in elements if needle in str(e.get("text") or "").lower()]
+        want = str(args["contains"])
+        elements = [e for e in elements if _text_match(want, e.get("text"))]
     out = {
         "origin": [ox, oy],
         "size": [img.width, img.height],
@@ -1281,6 +1426,29 @@ TOOLS = [
         },
     },
     {
+        "name": "screen_wait_text",
+        "title": "Wait for Text",
+        "annotations": _RO,
+        "description": "Block until `text` appears on screen (or timeout), then return its click coords. Use instead of screenshotting in a loop to see whether something finished. Polls the frame HASH and only runs OCR when the pixels actually changed — grounding costs seconds, a grab costs ~35ms, so a static screen is nearly free to wait on. Returns JSON {found,text,x,y,ms,grabs,ocr_passes}.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "substring to wait for (case-insensitive)",
+                },
+                "timeout": {"type": "number", "description": "seconds, default 10"},
+                "interval": {
+                    "type": "number",
+                    "description": "poll seconds, default 0.25",
+                },
+                "region": _REGION,
+                "monitor": {"type": "number"},
+            },
+            "required": ["text"],
+        },
+    },
+    {
         "name": "screen_read_text",
         "title": "Read Screen Text (No Image)",
         "annotations": _RO,
@@ -1487,6 +1655,7 @@ HANDLERS = {
     "screen_watch": autoloop.watch_1fps,
     "screen_session": recorder.tool_session,
     "screen_read_text": tool_read_text,
+    "screen_wait_text": tool_wait_text,
     "screen_diag": tool_diag,
     "screen_sense": tool_sense,
 }
