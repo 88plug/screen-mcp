@@ -3,9 +3,11 @@
 Owns one PERSISTENT pipewiresrc->appsink pipeline per monitor node, kept in PLAYING
 so each grab just pulls the latest negotiated frame (no per-call pipeline rebuild).
 The single OpenPipeWireRemote fd from state.SESSION backs every pipewiresrc; each
-pipewiresrc dup()s the fd internally so sharing is safe. BGRx is used on the wire for
-speed, then swapped to RGBA in numpy. GStreamer 1.28: `drop=` is gone — we use
-`leaky-type=downstream` + max-buffers=1 to keep only the freshest frame.
+pipewiresrc dup()s the fd internally so sharing is safe. RGBA is negotiated on the wire so
+videoconvert does the channel order in C — the old BGRx-then-swap-in-numpy path cost a 33MB
+fancy-index allocation (36.7ms) on every grab, including every settle/change-gate poll.
+GStreamer 1.28: `drop=` is gone — we use `leaky-type=downstream` + max-buffers=1 to keep
+only the freshest frame.
 
 DAMAGE-DRIVEN STREAMING: GNOME/Mutter negotiates framerate 0/1 (send-on-damage), so a
 monitor that is powered ON but STATIC (no cursor, no animation) produces NO buffer until
@@ -90,7 +92,7 @@ def _build_pipe(node_id):
     # event (ensure_geo's _nudge_prime). They still help once a buffer has flowed.
     pipe = Gst.parse_launch(
         f"pipewiresrc name=pwsrc fd={fd} path={node_id} keepalive-time=1000 resend-last=true "
-        f"! videoconvert ! video/x-raw,format=BGRx "
+        f"! videoconvert ! video/x-raw,format=RGBA "
         f"! appsink name=s sync=false max-buffers=1 leaky-type=downstream "
         f"emit-signals=false enable-last-sample=true"
     )
@@ -152,22 +154,43 @@ def _get_sink(node_id):
 
 
 def _sample_to_rgba(sample):
-    """Decode a GstSample (BGRx) -> (w, h, ndarray HxWx4 uint8 RGBA)."""
+    """Decode a GstSample (RGBA) -> (w, h, ndarray HxWx4 uint8 RGBA).
+
+    Two copies used to sit on this path and ran on EVERY grab, including each poll of the
+    settle/change-gate loops. At 3840x2160x4 (33MB) they measured 9.7ms and 36.7ms:
+
+      bytes(mi.data)        -> memcpy'd the whole mapped frame. mi.data is already a buffer;
+                               np.frombuffer wraps it as a VIEW for free. The view is only
+                               valid until unmap, so every read below happens inside the try.
+      arr[..., [2,1,0,3]]   -> a 33MB fancy-index allocation to swap BGRx->RGBA. The pipeline
+                               now negotiates RGBA directly (videoconvert does it in C), so
+                               there is nothing left to swap. The old comment claimed BGRx was
+                               "on the wire for speed" — measurably backwards once the cost
+                               landed in numpy instead of in GStreamer.
+
+    Still outstanding (measured, not yet wired): a region shot converts the whole frame and
+    then discards ~95% of it, which is why a 1500x130 region can cost MORE than a full-monitor
+    grab — 87.9ms vs 3.9ms if the crop is applied before the copy. Cropping here would make
+    `_note_frame`'s per-monitor freshness signature region-scoped, so it needs its own path
+    rather than a flag on this one."""
     st = sample.get_caps().get_structure(0)
     w, h = st.get_value("width"), st.get_value("height")
     buf = sample.get_buffer()
     ok, mi = buf.map(Gst.MapFlags.READ)
     try:
-        arr = np.frombuffer(bytes(mi.data), dtype=np.uint8)
+        raw = np.frombuffer(mi.data, dtype=np.uint8)  # view into the mapping, no copy
+        # Account for row padding via stride, then trim to exactly w*4 bytes/row.
+        stride = len(raw) // h
+        view = raw[: stride * h].reshape((h, stride))[:, : w * 4].reshape((h, w, 4))
+        # The ONE copy — .copy(), NOT ascontiguousarray: with RGBA the trimmed view is already
+        # contiguous, so ascontiguousarray returns it unchanged. That left `arr` aliasing the
+        # mapping (use-after-free once unmap runs below) and read-only, because frombuffer on
+        # the mapping yields a read-only array — the alpha write then died with
+        # "assignment destination is read-only". Caught on the first live grab.
+        arr = view.copy()
     finally:
         buf.unmap(mi)
-    # Account for row padding via stride, then trim to exactly w*4 bytes/row.
-    stride = len(arr) // h
-    arr = arr[: stride * h].reshape((h, stride))[:, : w * 4].reshape((h, w, 4))
-    # BGRx -> RGBA channel swap (x byte becomes opaque alpha below).
-    arr = arr[..., [2, 1, 0, 3]]
-    arr = np.ascontiguousarray(arr)
-    arr[..., 3] = 255  # BGRx has no real alpha; force opaque.
+    arr[..., 3] = 255  # the x/alpha byte is not meaningful upstream; force opaque.
     return w, h, arr
 
 

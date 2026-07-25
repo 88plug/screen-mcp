@@ -15,6 +15,26 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **Two hidden 33MB copies removed from every grab.** `_sample_to_rgba` ran on every frame
+  pull — including every poll of the settle and change-gate loops — and did `bytes(mi.data)`
+  (a full memcpy of the mapped 4K frame, 9.7ms) followed by `arr[..., [2,1,0,3]]` (a fancy-index
+  allocation to swap BGRx→RGBA, 36.7ms). `mi.data` is already a buffer, so `np.frombuffer`
+  wraps it as a view for free; and the pipeline now negotiates **RGBA** directly, so
+  videoconvert does the channel order in C and there is nothing left to swap. The old
+  "BGRx on the wire for speed" comment was backwards once the cost landed in numpy. ~46ms
+  saved per grab; a plain monitor shot went 1286ms → 1084ms, and the poll loops that grab
+  5–9 times per action save proportionally more. Colors verified live after the caps change.
+
+  The copy must be `.copy()`, not `ascontiguousarray`: with RGBA the trimmed view is already
+  contiguous, so `ascontiguousarray` returned it unchanged — leaving the array aliasing the
+  buffer after `unmap` (use-after-free) and read-only, which killed the alpha write with
+  "assignment destination is read-only" on the first live grab.
+
+  Still open, measured but not wired: a region shot converts the whole frame then discards
+  ~95% of it, which is why a 1500x130 region can cost *more* than a full-monitor grab
+  (87.9ms vs 3.9ms cropping first). Cropping in `_sample_to_rgba` would make `_note_frame`'s
+  per-monitor freshness signature region-scoped, so it needs its own path.
+
 - **`screen_drag` takes `modifiers`, held for the whole press-move-release.** Without it,
   `screen_read_selection` could not be used where it matters most: a terminal running a TUI
   (Claude Code, vim, htop) enables mouse tracking and consumes the drag itself, so no
