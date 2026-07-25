@@ -15,6 +15,17 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **Cross-layer verification proven end-to-end with os-control-mcp's `os_verify`.**
+  `screen_verify`'s `pixel` block is exactly the contract `os_verify` consumes, so the two
+  compose with no code changes — confirmed by running both quadrants against the live
+  desktop: a GUI-only action (hover) with an untouched unit returns `DIVERGED` /
+  `cross_layer: "pixel-changed-os-static"` / `reconciled: false`, and an action inert at
+  both layers returns `NO_OP` / `reconciled: true`. The integration gap was documentation,
+  not plumbing: os-control's `cross-layer-verify` skill predated `screen_verify` and taught
+  only the passive `screen_sense`. It now teaches both and says when each applies —
+  `screen_verify` polls and grades (use when the GUI effect may lag), `screen_sense` reads
+  what the last action already left behind (use when it is instantaneous).
+
 - **New `screen_verify` — grade the last action instead of eyeballing a screenshot.**
   Returns CONFIRMED | PARTIAL | NO_OP | DIVERGED, the same vocabulary as os-control-mcp's
   `os_verify`, and the `pixel` block it returns is exactly what `os_verify` consumes — so

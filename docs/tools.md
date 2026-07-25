@@ -159,6 +159,28 @@ read the same way and compose.
 Measured: an inert mouse move → `NO_OP`; a hover that highlights a menu item →
 `CONFIRMED` in 23 ms.
 
+#### Cross-layer: pairing with `os_verify`
+
+The `pixel` block this returns is the contract os-control-mcp's `os_verify` consumes, so
+a GUI verdict and an OS verdict compose into one answer:
+
+```
+os_verify     action=begin  units=["nginx.service"]      -> token
+screen_click  ...                                         (do the thing)
+screen_verify expect_text="Restarted"                     -> {"verdict":..,"pixel":{"changed":true}}
+os_verify     action=end    token=<token> pixel={"changed":true}
+```
+
+Verified live, both quadrants:
+
+| GUI | OS | `os_verify` status | `cross_layer` | reconciled |
+|---|---|---|---|---|
+| changed | static | `DIVERGED` | `pixel-changed-os-static` | `false` |
+| static | static | `NO_OP` | `null` | `true` |
+
+`pixel-changed-os-static` is the one to care about: the button "worked" visually and did
+nothing real.
+
 ### `screen_wait_text` — Wait for Text (RO)
 
 Block until `text` appears on screen (or timeout), then return its click coords. Use
