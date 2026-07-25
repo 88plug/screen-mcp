@@ -15,6 +15,19 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **New `screen_read_text` — read the screen as text + click coords, no image.** Every
+  latency win this session left the token cost untouched: an image bills a FIXED
+  `ceil(w/28)*ceil(h/28)` visual tokens (4784 for a 4K monitor) regardless of how small the
+  encode gets. For navigate-by-text work the pixels are not what the caller needs. Measured
+  on a 4K monitor: 4784 tokens / 412ms for a screenshot vs **~1350 tokens / 67ms** unfiltered
+  (104 elements) and **~95 tokens** with `contains=`. Reuses the existing perception path —
+  world-model recall first, which skips OCR entirely on a known screen (7747ms → 42ms
+  measured) — so it was almost entirely wiring, not new machinery. Coordinates return in
+  desktop space and are directly clickable. (Steal from QuickDesk's `get_ui_state`.)
+
+  The first draft of the tool description claimed "~10x cheaper". Measuring it gave 3.5x
+  unfiltered and 50x filtered, so the description now carries the real numbers.
+
 - **`screen_read_selection` waits for the clipboard instead of guessing 140ms.** It slept a
   fixed `GLib.usleep(140000)` after sending the copy combo, then read. That was wrong in both
   directions: it charged every fast app the full delay, and any app slower than it read back

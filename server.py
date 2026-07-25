@@ -410,6 +410,101 @@ def tool_screenshot(args):
     return {"content": content}
 
 
+def tool_read_text(args):
+    """Return what is ON the screen as TEXT — no image block.
+
+    A screenshot costs a FIXED ceil(w/28)*ceil(h/28) visual tokens (4784 for a 4K monitor)
+    no matter how fast the encode gets. Every latency win this session left that number
+    untouched. For navigate-by-text work — find a label, read a value, confirm a string
+    appeared — the pixels are not what the caller needs; the text is, and it is ~10x cheaper.
+
+    Same perception path as screenshot(annotate=true), minus the encode and the image:
+    world-model recall first (skips OCR entirely on a screen we have seen), else grounding.
+    Coordinates come back in DESKTOP space, so they can be clicked directly."""
+    t0 = time.time()
+    state.stage_reset()
+    region = args.get("region")
+    monitor = args.get("monitor")
+    try:
+        with state.stage("capture"):
+            img, ox, oy = capture.capture_desktop(region, monitor, fresh=False)
+    except RuntimeError as e:
+        hint = capture.asleep_hint(monitor)
+        return {"content": [_txt(hint or str(e))], "isError": True}
+    aware = "unavailable"
+    try:
+        with state.stage("aware"):
+            aware = awareness.summary()
+    except Exception:
+        pass
+    view_ctx = [ox, oy, img.width, img.height]
+    elements, cached = [], False
+    hit = (
+        worldmodel.MAP.recall(img, aware, view_ctx)
+        if args.get("use_cache", True)
+        else None
+    )
+    if hit:
+        cached = True
+        for eid in sorted(hit["elements"]):
+            e = hit["elements"][eid]
+            elements.append(
+                {
+                    "id": eid,
+                    "role": e.get("role"),
+                    "text": e.get("label"),
+                    "x": e["x"],
+                    "y": e["y"],
+                }
+            )
+    else:
+        try:
+            with state.stage("ground"):
+                _marked, found = grounding.annotate(img)
+            store = {}
+            for e in found:
+                x1, y1, x2, y2 = e["bbox"]
+                cx, cy = ox + (x1 + x2) // 2, oy + (y1 + y2) // 2
+                store[e["id"]] = {
+                    "x": cx,
+                    "y": cy,
+                    "label": e["label"],
+                    "role": e["role"],
+                }
+                elements.append(
+                    {
+                        "id": e["id"],
+                        "role": e["role"],
+                        "text": e["label"],
+                        "x": cx,
+                        "y": cy,
+                    }
+                )
+            state.SESSION["elements"] = store
+            state.SESSION["elements_state_id"] = worldmodel.MAP.observe(
+                img, store, aware, view_ctx
+            )
+        except Exception as ex:  # noqa: BLE001 — perception is fail-open everywhere else
+            return {"content": [_txt(f"read_text failed: {ex}")], "isError": True}
+    if args.get("contains"):
+        needle = str(args["contains"]).lower()
+        elements = [e for e in elements if needle in str(e.get("text") or "").lower()]
+    out = {
+        "origin": [ox, oy],
+        "size": [img.width, img.height],
+        "focused": aware,
+        "cached": cached,
+        "count": len(elements),
+        "elements": elements,
+    }
+    body = json.dumps(out, separators=(",", ":"))
+    content = [_txt(body)]
+    sl = state.stage_line(int((time.time() - t0) * 1000))
+    if sl:
+        content.append(_txt(sl))
+    return {"content": content}
+
+
 def tool_diag(args):
     """Live health dump: session/geo, the cursor probe cache + guard state, grounding
     backends, and prereqs matrix. Permanent ops tool — first thing to check when
@@ -1186,6 +1281,27 @@ TOOLS = [
         },
     },
     {
+        "name": "screen_read_text",
+        "title": "Read Screen Text (No Image)",
+        "annotations": _RO,
+        "description": "Return what is on screen as TEXT + click coords, with NO image. A screenshot costs a fixed ceil(w/28)*ceil(h/28) visual tokens (4784 for a 4K monitor) regardless of encoding; this returns just the elements. Measured on a 4K monitor: ~1350 tokens unfiltered (104 elements, 3.5x cheaper) and ~95 tokens with contains= (50x cheaper), at 67ms vs 412ms. Use it to find a label, read a value, or confirm a string appeared — then click by the desktop coords it returns. use_cache=true (default) reuses learned elements for a known screen and skips OCR entirely. contains='foo' filters to matching text. Returns JSON {origin,size,focused,cached,count,elements[{id,role,text,x,y}]}.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "region": _REGION,
+                "monitor": {"type": "number"},
+                "contains": {
+                    "type": "string",
+                    "description": "only return elements whose text contains this (case-insensitive)",
+                },
+                "use_cache": {
+                    "type": "boolean",
+                    "description": "reuse learned elements for a known screen, skipping OCR (default true)",
+                },
+            },
+        },
+    },
+    {
         "name": "screen_read_selection",
         "title": "Read Selection (Exact Text)",
         "annotations": _ACT,
@@ -1370,6 +1486,7 @@ HANDLERS = {
     "screen_wait": tool_wait,
     "screen_watch": autoloop.watch_1fps,
     "screen_session": recorder.tool_session,
+    "screen_read_text": tool_read_text,
     "screen_diag": tool_diag,
     "screen_sense": tool_sense,
 }

@@ -126,6 +126,31 @@ Type text (Unicode ok via clipboard paste; ASCII via keysyms). `enter=true` pres
 | `focus` | string | Raise + focus before type |
 | `shot`, `verify`, `force`, `region`, `settle` | | |
 
+### `screen_read_text` — Read Screen Text (No Image) (RO)
+
+Return what is on screen as **text + click coords**, with no image block.
+
+A screenshot costs a fixed `ceil(w/28) * ceil(h/28)` visual tokens — **4784 for a 4K
+monitor** — no matter how small the encoded file gets. For navigate-by-text work the pixels
+are not what you need. Measured on a 4K monitor:
+
+| Read | Tokens | Latency |
+|---|---|---|
+| `screen_screenshot` | 4784 | 412 ms |
+| `screen_read_text` (104 elements) | ~1350 | 67 ms |
+| `screen_read_text` + `contains=` | ~95 | 67 ms |
+
+| Arg | Type | Notes |
+|---|---|---|
+| `region` | array | `[x,y,w,h]` desktop px |
+| `monitor` | number | |
+| `contains` | string | Only elements whose text contains this (case-insensitive) |
+| `use_cache` | bool | Reuse learned elements for a known screen, skipping OCR (default true) |
+
+Same perception path as `screen_screenshot(annotate=true)` minus the encode and the image:
+world-model recall first (a cache hit skips OCR entirely — 7747 ms → 42 ms measured), else
+grounding. Coordinates come back in **desktop** space, so they are directly clickable.
+
 ### `screen_read_selection` — Read Selection (Exact Text) (ACT)
 
 Copy the **focused** window's current selection and return it verbatim. Prefer this over
@@ -233,6 +258,7 @@ Return the normalized change signal from the most recent frame diff — `{change
 | `screen_drag` | Drag | ACT |
 | `screen_key` | Press Key | ACT |
 | `screen_type` | Type Text | ACT |
+| `screen_read_text` | Read Screen Text (No Image) | RO |
 | `screen_read_selection` | Read Selection (Exact Text) | ACT |
 | `screen_focus` | Focus Window | ACT |
 | `screen_do` | Batch Actions | DEST |
