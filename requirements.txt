@@ -10,7 +10,7 @@ Pillow>=10.0
 # image unchanged with an empty element list.
 rapidocr-onnxruntime>=1.4   # text OCR backend (RapidOCR v3)
 onnxruntime>=1.18           # OmniParser icon_detect (CPU-only, YOLOv8 ONNX)
-opencv-python-headless>=4.8 # letterbox/NMS for OmniParser + classical CV fallback
+opencv-python-headless>=4.8 # letterbox/NMS for OmniParser, classical CV fallback, and the INTER_AREA screenshot downscale (15x faster than PIL LANCZOS)
 
 # DEV — test runner. The conftest stubs heavy modules so tests run without a live
 # D-Bus session; install just this to run `pytest -q`.

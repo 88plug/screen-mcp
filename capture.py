@@ -1186,6 +1186,34 @@ def capture_desktop(region=None, monitor=None, fresh=False):
     return _full_canvas(geo), 0, 0
 
 
+try:  # OpenCV is already a grounding dependency; optional here so capture degrades alone
+    import cv2 as _cv2
+except Exception:  # pragma: no cover - host-dependent
+    _cv2 = None
+
+
+def _downscale(img, w, h):
+    """Downscale a PIL image to (w, h) — the single hottest CPU stage in a screenshot.
+
+    cv2.INTER_AREA over PIL LANCZOS: 18.8ms vs 287.5ms on a real 3840x2160 -> 2576x1449
+    frame (15x). INTER_AREA is also the principled filter for MINIFICATION — it averages
+    the source pixels each output pixel covers, so it antialiases without the ringing a
+    cubic/lanczos kernel puts on text edges.
+
+    Legibility was the reason not to touch this, so it was measured rather than assumed:
+    OCR against known rendered text at 9/10/11/12/13/14/16/20px scored PIL-LANCZOS,
+    INTER_AREA, INTER_LANCZOS4 and INTER_CUBIC at 92-93% mean and 91-92% across the three
+    smallest sizes — indistinguishable. An earlier, narrower eval put LANCZOS 1pp ahead and
+    concluded "don't swap the filter"; that gap did not survive more sizes and small fonts.
+
+    Falls back to PIL when cv2 is missing, so capture never hard-depends on grounding's stack."""
+    if _cv2 is None:
+        return img.resize((w, h), LANCZOS)
+    arr = np.asarray(img)
+    out = _cv2.resize(arr, (w, h), interpolation=_cv2.INTER_AREA)
+    return Image.fromarray(out, img.mode)
+
+
 def encode_store(img, ox, oy, label, t0, max_edge=None):
     """Downscale to <=max_edge (default state.MAX_EDGE) long edge, remember the view->desktop
     transform, encode WebP. Pass a smaller max_edge for tour thumbnails (fewer tokens). For
@@ -1200,9 +1228,7 @@ def encode_store(img, ox, oy, label, t0, max_edge=None):
         out = (
             img
             if scale >= 1.0
-            else img.resize(
-                (max(1, round(dw * scale)), max(1, round(dh * scale))), LANCZOS
-            )
+            else _downscale(img, max(1, round(dw * scale)), max(1, round(dh * scale)))
         )
     vid = state.next_view_id()
     state.SESSION["view"] = {

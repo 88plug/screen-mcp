@@ -15,6 +15,26 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **Screenshot downscale moved to cv2 INTER_AREA — 15x faster than PIL LANCZOS.**
+  287.5ms → 18.8ms on a real 3840x2160 → 2576x1449 frame; live shot 528ms → 412ms with
+  the resize stage at 84ms (was 408ms two commits ago). INTER_AREA is also the principled
+  filter for minification: it averages the source pixels each output pixel covers, so it
+  antialiases without the ringing a cubic/lanczos kernel leaves on text edges. The encoded
+  payload got *smaller* too (538KB → 502KB) — less high-frequency ringing to compress.
+  Falls back to PIL when cv2 is absent, so capture never hard-depends on grounding's stack.
+
+  This also **reverses an earlier call in this changelog**. A narrower eval had LANCZOS 1pp
+  ahead of the alternatives and concluded "don't swap the filter". Re-run against known
+  rendered text at 9/10/11/12/13/14/16/20px, PIL-LANCZOS / INTER_AREA / INTER_LANCZOS4 /
+  INTER_CUBIC all score 92-93% mean and 91-92% across the three smallest sizes — the gap
+  was never real, and 15x was being paid for nothing.
+
+  It also kills a planned GStreamer `videoscale` change. videoscale-lanczos measured 78.5ms
+  net, genuinely faster than PIL — but it would have required teaching every coordinate path
+  that frame px != desktop px (the documented click-accuracy hazard), and pipeline scaling is
+  EAGER: it runs on every damage frame (~3.5/s) rather than only frames we pull. cv2 is
+  lazy, 4x faster still, and touches no coordinates.
+
 - **Alpha plane dropped end-to-end — pipeline negotiates RGB, not RGBA.** The stage timer
   showed resize was 68% of a shot (408ms of 601ms), and it was resizing a channel nothing
   reads: the alpha byte was forced to a constant 255, carried through LANCZOS, then encoded.
