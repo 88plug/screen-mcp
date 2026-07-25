@@ -181,16 +181,16 @@ Module map:
 - `screen_diag` is the first thing to check when capture/clicks/cursor misbehave.
 
 <!-- drift-detector:start -->
-<!-- calibrated 2026-07-25 · last 50 sessions · 50 sampled · drift rate 38.2% -->
+<!-- calibrated 2026-07-25 · last 50 sessions · 50 sampled · drift rate 38.7% -->
 
 ## Anti-drift (auto-calibrated from real session data)
 
-Drift observed in 38.2% of turns across 50 recent sessions.
+Drift observed in 38.7% of turns across 50 recent sessions.
 
 - **Verbosity (long sentences)** (fires in ~100% of drifted turns): Break sentences at conjunctions. Target ≤15 words/sentence.
-- **Sentence complexity** (fires in ~100% of drifted turns): Prefer parallel short clauses over embedded subordinates.
 - **Response length** (fires in ~100% of drifted turns): Lead with the answer; cut trailing restatements.
+- **Sentence complexity** (fires in ~100% of drifted turns): Prefer parallel short clauses over embedded subordinates.
 - **Filler / pleasantry words** (fires in ~20% of drifted turns): Cut openers: "Sure!", "Certainly!", "Of course!", "Great question!".
-- **Hype** (fires in ~2% of drifted turns): Reduce this pattern.
+- **Hype** (fires in ~1% of drifted turns): Reduce this pattern.
 
 <!-- drift-detector:end -->

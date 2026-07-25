@@ -3,9 +3,11 @@
 Owns one PERSISTENT pipewiresrc->appsink pipeline per monitor node, kept in PLAYING
 so each grab just pulls the latest negotiated frame (no per-call pipeline rebuild).
 The single OpenPipeWireRemote fd from state.SESSION backs every pipewiresrc; each
-pipewiresrc dup()s the fd internally so sharing is safe. RGBA is negotiated on the wire so
-videoconvert does the channel order in C — the old BGRx-then-swap-in-numpy path cost a 33MB
-fancy-index allocation (36.7ms) on every grab, including every settle/change-gate poll.
+pipewiresrc dup()s the fd internally so sharing is safe. RGB (24-bit, no alpha) is negotiated
+on the wire: videoconvert does the channel order in C, and dropping the alpha plane makes every
+downstream stage cheaper. The old BGRx-then-swap-in-numpy path cost a 33MB fancy-index
+allocation (36.7ms) per grab; carrying a constant-255 alpha then cost another 1.58x on the
+LANCZOS resize (471ms -> 298ms) for a channel nothing reads.
 GStreamer 1.28: `drop=` is gone — we use `leaky-type=downstream` + max-buffers=1 to keep
 only the freshest frame.
 
@@ -92,7 +94,7 @@ def _build_pipe(node_id):
     # event (ensure_geo's _nudge_prime). They still help once a buffer has flowed.
     pipe = Gst.parse_launch(
         f"pipewiresrc name=pwsrc fd={fd} path={node_id} keepalive-time=1000 resend-last=true "
-        f"! videoconvert ! video/x-raw,format=RGBA "
+        f"! videoconvert ! video/x-raw,format=RGB "
         f"! appsink name=s sync=false max-buffers=1 leaky-type=downstream "
         f"emit-signals=false enable-last-sample=true"
     )
@@ -153,8 +155,8 @@ def _get_sink(node_id):
     return winning
 
 
-def _sample_to_rgba(sample):
-    """Decode a GstSample (RGBA) -> (w, h, ndarray HxWx4 uint8 RGBA).
+def _sample_to_rgb(sample):
+    """Decode a GstSample (RGB) -> (w, h, ndarray HxWx3 uint8 RGB).
 
     Two copies used to sit on this path and ran on EVERY grab, including each poll of the
     settle/change-gate loops. At 3840x2160x4 (33MB) they measured 9.7ms and 36.7ms:
@@ -163,8 +165,8 @@ def _sample_to_rgba(sample):
                                np.frombuffer wraps it as a VIEW for free. The view is only
                                valid until unmap, so every read below happens inside the try.
       arr[..., [2,1,0,3]]   -> a 33MB fancy-index allocation to swap BGRx->RGBA. The pipeline
-                               now negotiates RGBA directly (videoconvert does it in C), so
-                               there is nothing left to swap. The old comment claimed BGRx was
+                               now negotiates RGB directly (videoconvert does it in C), so
+                               there is nothing left to swap and no alpha plane to carry. The old comment claimed BGRx was
                                "on the wire for speed" — measurably backwards once the cost
                                landed in numpy instead of in GStreamer.
 
@@ -181,8 +183,8 @@ def _sample_to_rgba(sample):
         raw = np.frombuffer(mi.data, dtype=np.uint8)  # view into the mapping, no copy
         # Account for row padding via stride, then trim to exactly w*4 bytes/row.
         stride = len(raw) // h
-        view = raw[: stride * h].reshape((h, stride))[:, : w * 4].reshape((h, w, 4))
-        # The ONE copy — .copy(), NOT ascontiguousarray: with RGBA the trimmed view is already
+        view = raw[: stride * h].reshape((h, stride))[:, : w * 3].reshape((h, w, 3))
+        # The ONE copy — .copy(), NOT ascontiguousarray: the trimmed view is already
         # contiguous, so ascontiguousarray returns it unchanged. That left `arr` aliasing the
         # mapping (use-after-free once unmap runs below) and read-only, because frombuffer on
         # the mapping yields a read-only array — the alpha write then died with
@@ -190,7 +192,6 @@ def _sample_to_rgba(sample):
         arr = view.copy()
     finally:
         buf.unmap(mi)
-    arr[..., 3] = 255  # the x/alpha byte is not meaningful upstream; force opaque.
     return w, h, arr
 
 
@@ -375,7 +376,7 @@ def wait_damage(ev, timeout):
     """Block up to `timeout` seconds for real damage on an armed node. True = damage arrived.
 
     Probe A/B primitive: waiting here costs nothing, whereas each poll iteration pays a full
-    grab + 4K RGBA convert + hash. Never raises."""
+    grab + 4K RGB convert + hash. Never raises."""
     try:
         return bool(ev.wait(timeout))
     except Exception:
@@ -600,7 +601,7 @@ def draw_cursor(img, ox, oy):
 
 
 def grab(node_id, rebuild=True):
-    """Pull the latest frame for one monitor node -> (w, h, ndarray HxWx4 uint8 RGBA).
+    """Pull the latest frame for one monitor node -> (w, h, ndarray HxWx3 uint8 RGB).
 
     rebuild=False skips the stale-pipeline teardown+rebuild path so an idle monitor
     fails fast (one build) instead of paying a second full pipeline build."""
@@ -619,7 +620,7 @@ def grab(node_id, rebuild=True):
             f"streams on damage, so an idle screen emits no frame until something changes)"
         )
     with state.stage("decode"):
-        w, h, arr = _sample_to_rgba(sample)
+        w, h, arr = _sample_to_rgb(sample)
     changed = _note_frame(
         node_id, arr
     )  # track freshness so screenshots can flag a possibly-stale frame
@@ -760,7 +761,7 @@ def _nudge_prime(node_id, lpx, lpy, lw, lh, sx, sy):
             )
             return None
         _NUDGE_DEBUG[node_id] = "primed OK"
-        return _sample_to_rgba(sample)
+        return _sample_to_rgb(sample)
     except Exception as e:
         _NUDGE_DEBUG[node_id] = f"exception: {type(e).__name__}: {e}"
         return None
@@ -1048,9 +1049,8 @@ def monitors_for(region):
 
 
 def _full_canvas(mons):
-    """Composite the given monitors onto the full native canvas -> PIL RGBA."""
-    canvas = np.zeros((state.SESSION["H"], state.SESSION["W"], 4), dtype=np.uint8)
-    canvas[..., 3] = 255
+    """Composite the given monitors onto the full native canvas -> PIL RGB."""
+    canvas = np.zeros((state.SESSION["H"], state.SESSION["W"], 3), dtype=np.uint8)
     # rebuild=False: ensure_geo already primed live monitors, so this returns cached frames
     # instantly instead of paying the ~15s rebuild penalty per static monitor (the old
     # full-desktop capture spent 10-30s almost entirely here).
@@ -1062,7 +1062,7 @@ def _full_canvas(mons):
         cw = min(w, canvas.shape[1] - m["x"])
         if ch > 0 and cw > 0:
             canvas[m["y"] : m["y"] + ch, m["x"] : m["x"] + cw] = arr[:ch, :cw]
-    return Image.fromarray(canvas, "RGBA")
+    return Image.fromarray(canvas, "RGB")
 
 
 def asleep_hint(monitor=None):
@@ -1111,7 +1111,7 @@ def asleep_hint(monitor=None):
 
 
 def capture_desktop(region=None, monitor=None, fresh=False):
-    """Return (PIL RGBA at real desktop pixels, origin_x, origin_y).
+    """Return (PIL RGB at real desktop pixels, origin_x, origin_y).
 
     monitor=index -> that monitor's frame (origin = its x,y).
     region within a single monitor -> fast single grab + crop.
@@ -1150,7 +1150,7 @@ def capture_desktop(region=None, monitor=None, fresh=False):
         m = geo[int(monitor)]
         try:
             w, h, arr = _grab1(m)
-            return Image.fromarray(arr, "RGBA"), m["x"], m["y"]
+            return Image.fromarray(arr, "RGB"), m["x"], m["y"]
         except Exception:
             # Static-monitor fallback: the single-monitor grab can fail (and its rebuild path goes
             # COLD) where the composite — which never rebuilds and tolerates a no-frame monitor —
@@ -1169,7 +1169,7 @@ def capture_desktop(region=None, monitor=None, fresh=False):
             m = mons[0]
             try:
                 w, h, arr = _grab1(m)
-                img = Image.fromarray(arr, "RGBA")
+                img = Image.fromarray(arr, "RGB")
                 cx, cy = rx - m["x"], ry - m["y"]
                 return (
                     img.crop((max(0, cx), max(0, cy), cx + rw, cy + rh)),
@@ -1219,7 +1219,7 @@ def encode_store(img, ox, oy, label, t0, max_edge=None):
     if max_edge and me < state.MAX_EDGE:
         out.convert("RGB").save(buf, format="WEBP", quality=80, method=4)
     else:
-        out.convert("RGBA").save(
+        out.convert("RGB").save(
             buf,
             format="WEBP",
             lossless=True,

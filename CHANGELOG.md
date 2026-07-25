@@ -15,6 +15,15 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
   pixel-exact round-trips at every method/effort combination so the lossless guarantee
   cannot silently regress.
 
+- **Alpha plane dropped end-to-end — pipeline negotiates RGB, not RGBA.** The stage timer
+  showed resize was 68% of a shot (408ms of 601ms), and it was resizing a channel nothing
+  reads: the alpha byte was forced to a constant 255, carried through LANCZOS, then encoded.
+  videoconvert now emits 24-bit RGB, so the decode copies 24.9MB instead of 33.2MB and the
+  resize works on 3 channels — measured 471ms → 298ms (1.58x) on a real frame. Encode is
+  ~18ms slower on RGB but the output is byte-for-byte the same size (745KB), because a
+  constant alpha plane compresses to nothing. Net ~155ms/shot; live shot 601ms → 528ms with
+  resize 408 → 264. Colors verified live after the caps change.
+
 - **Per-stage timing on every screenshot and action (`stages: …ms`).** Stage stamps live in
   `state.py` (the one module everything imports, so no cycle) and cover pull, decode, resize,
   encode, aware, ground, gate and settle, plus an explicit `other` remainder so unexplained
