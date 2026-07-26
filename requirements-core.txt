@@ -9,4 +9,4 @@
 # load-bearing, since PyGObject `gi` / GStreamer / PipeWire are system packages a
 # plain venv would hide.
 numpy>=1.26
-Pillow>=10.0
+Pillow>=12.3.0
