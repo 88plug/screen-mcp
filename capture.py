@@ -8,9 +8,11 @@ on the wire: videoconvert does the channel order in C, and dropping the alpha pl
 downstream stage cheaper. The old BGRx-then-swap-in-numpy path cost a 33MB fancy-index
 allocation (36.7ms) per grab; carrying a constant-255 alpha then cost another 1.58x on the
 LANCZOS resize (471ms -> 298ms) for a channel nothing reads.
-GStreamer 1.28: `drop=` is gone — we use `leaky-type=downstream` + max-buffers=1 to keep
-only the freshest frame.
-
+appsink's freshest-frame property is chosen at RUNTIME (see _appsink_drop_prop):
+`leaky-type=downstream` where present, else `drop=true`. An earlier note here said `drop=`
+was gone in 1.28 — it is not: 1.28 exposes BOTH, while GStreamer 1.24 (current Ubuntu LTS)
+has only `drop`. Hard-coding leaky-type silently excluded that LTS — the pipeline
+failed to parse outright. Measured on a real GNOME/X11 VM.
 DAMAGE-DRIVEN STREAMING: GNOME/Mutter negotiates framerate 0/1 (send-on-damage), so a
 monitor that is powered ON but STATIC (no cursor, no animation) produces NO buffer until
 something on it changes. pipewiresrc's keepalive-time only re-sends an ALREADY-EXISTING
@@ -97,6 +99,38 @@ _NUDGE_DEBUG = {}
 _BUILDING = {}
 
 
+_DROP_PROP = None
+
+
+def _appsink_drop_prop():
+    """The appsink "keep only the freshest buffer" property, chosen at RUNTIME.
+
+    This was hard-coded to `leaky-type=downstream`, which made GStreamer >= 1.28 a hard
+    requirement and silently excluded the CURRENT Ubuntu LTS. Measured on a real GNOME/X11
+    VM (Ubuntu 24.04, GStreamer 1.24.2): `appsink` has `drop` but NOT `leaky-type`, and our
+    exact pipeline string fails to parse —
+
+        WARNING: erroneous pipeline: no property "leaky-type" in element "appsink"
+
+    while the `drop=true` form parses cleanly. On this host (1.28) appsink exposes BOTH, so
+    `drop` is not gone as an earlier note in CLAUDE.md claimed — it is still there and still
+    works. Prefer `leaky-type` where present (it is the modern spelling) and fall back to
+    `drop`, which takes the supported floor from 1.28 down to 1.14-era.
+    """
+    global _DROP_PROP
+    if _DROP_PROP is None:
+        try:
+            factory = Gst.ElementFactory.find("appsink")
+            el = factory.create(None) if factory else None
+            names = {p.name for p in el.list_properties()} if el else set()
+            _DROP_PROP = (
+                "leaky-type=downstream" if "leaky-type" in names else "drop=true"
+            )
+        except Exception:
+            _DROP_PROP = "drop=true"  # the widely-supported spelling
+    return _DROP_PROP
+
+
 def _build_pipe(node_id):
     """Create + start a persistent pipewiresrc->appsink pipeline for one node.
 
@@ -111,7 +145,7 @@ def _build_pipe(node_id):
     pipe = Gst.parse_launch(
         f"pipewiresrc name=pwsrc fd={fd} path={node_id} keepalive-time=1000 resend-last=true "
         f"! videoconvert ! video/x-raw,format=RGB "
-        f"! appsink name=s sync=false max-buffers=1 leaky-type=downstream "
+        f"! appsink name=s sync=false max-buffers=1 {_appsink_drop_prop()} "
         f"emit-signals=false enable-last-sample=true"
     )
     sink = pipe.get_by_name("s")

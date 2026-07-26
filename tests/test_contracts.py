@@ -222,3 +222,24 @@ def test_v6_params_degrade_on_older_rapidocr(monkeypatch):
     fake = cast(Any, types.ModuleType("rapidocr"))  # no OCRVersion/ModelType attributes
     monkeypatch.setitem(__import__("sys").modules, "rapidocr", fake)
     assert g._v6_tiny_params() == {}
+
+
+def test_appsink_drop_property_is_chosen_at_runtime():
+    """THE LTS-EXCLUSION BUG. The pipeline hard-coded `leaky-type=downstream`, making
+    GStreamer >= 1.28 a silent hard requirement. Measured on a real GNOME/X11 VM
+    (Ubuntu 24.04, GStreamer 1.24.2): appsink has `drop` but NOT `leaky-type`, and the
+    pipeline failed to parse outright — "no property leaky-type in element appsink".
+    1.28 exposes BOTH, so `drop` was never actually removed.
+
+    Guard the source, not the runtime: the pipeline string must not name either property
+    literally, and the chooser must offer both spellings."""
+    src = (ROOT / "capture.py").read_text()
+    launch = src[src.index("Gst.parse_launch(") : src.index("Gst.parse_launch(") + 500]
+    assert "leaky-type=downstream" not in launch, (
+        "the pipeline must not hard-code leaky-type — it excludes GStreamer < 1.28"
+    )
+    assert "_appsink_drop_prop()" in launch, "the property must be chosen at runtime"
+    chooser = src[src.index("def _appsink_drop_prop") :][:1200]
+    assert "leaky-type=downstream" in chooser and "drop=true" in chooser, (
+        "the chooser must offer BOTH spellings"
+    )
