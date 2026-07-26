@@ -12,6 +12,11 @@ dependencies = [
     "opencv-python-headless>=4.8",
     "onnxruntime>=1.18",
     "rapidocr>=3.0",
+    # X11 capture fallback. Pure-ctypes XCB (py3-none-any wheel, no compilation, no runtime
+    # pip deps). Load-bearing on X11: it reads XRandR in-process, so per-monitor geometry
+    # works with NO xrandr/xdpyinfo binaries — both of which are absent on a normal desktop,
+    # which is why the shell-out version reported zero monitors on a two-monitor box.
+    "mss>=10.2",
 ]
 
 [project.optional-dependencies]

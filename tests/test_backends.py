@@ -53,7 +53,9 @@ def test_availability_caches_and_rechecks(monkeypatch):
 
     def fake_grab():
         calls.append(1)
-        return Image.new("RGB", (4, 4))
+        # NON-black on purpose: availability now validates pixel content, because an
+        # all-zero frame is exactly what rootless Xwayland returns without raising.
+        return Image.new("RGB", (4, 4), (120, 30, 90))
 
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setattr(x11capture, "DISABLED", False)
@@ -228,3 +230,64 @@ def test_toolkit_toggle_is_read_out_of_process(monkeypatch):
 
     monkeypatch.setattr(atspi_tree.subprocess, "run", lambda *a, **k: _Bad())
     assert atspi_tree.toolkit_accessibility_enabled() is None
+
+
+def test_geometry_does_not_depend_on_external_binaries(monkeypatch):
+    """THE ZERO-MONITOR BUG. geometry() parsed `xrandr`, falling back to `xdpyinfo`.
+    NEITHER binary exists on a normal GNOME desktop — measured on this host — so it
+    returned [] on a two-monitor box and the X11 fallback could never have worked.
+    mss reads XRandR in-process, so with no binaries at all we must still enumerate."""
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(x11capture.shutil, "which", lambda _n: None)  # no binaries
+    monkeypatch.setattr(x11capture, "_MONS", None, raising=False)
+
+    class _S:
+        monitors = [
+            {"left": 0, "top": 0, "width": 7680, "height": 2160},
+            {"left": 3840, "top": 0, "width": 3840, "height": 2160, "output": "DP-1"},
+            {"left": 0, "top": 0, "width": 3840, "height": 2160, "output": "DP-2"},
+        ]
+
+    monkeypatch.setattr(x11capture, "_mss", lambda cursor=False: _S())
+    geo = x11capture.geometry()
+    assert len(geo) == 2, f"must enumerate per-output with no binaries, got {geo}"
+    assert {g["name"] for g in geo} == {"DP-1", "DP-2"}
+    assert geo[0]["w"] == 3840
+
+
+def test_availability_rejects_an_all_black_frame(monkeypatch):
+    """On rootless Xwayland an XShm grab can return an ALL-ZERO image without raising, so
+    an exception-only probe reports available=True and every frame is silently black."""
+    black = Image.new("RGB", (256, 256), (0, 0, 0))
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(x11capture, "DISABLED", False)
+    monkeypatch.setattr(x11capture, "grab_root", lambda: black)
+    monkeypatch.setattr(x11capture, "_PROBE", None)
+    assert x11capture.available() is False, (
+        "an all-black frame is not a working capture"
+    )
+
+    real = Image.new("RGB", (256, 256), (0, 0, 0))
+    real.putpixel((5, 5), (200, 10, 10))
+    monkeypatch.setattr(x11capture, "grab_root", lambda: real)
+    monkeypatch.setattr(x11capture, "_PROBE", None)
+    assert x11capture.available() is True
+
+
+def test_region_grab_is_server_side_when_mss_is_present(monkeypatch):
+    """Root-grab-then-crop was ~15x more expensive on a 4K root. The region must be asked
+    of X directly, so grab_root must NOT be consulted."""
+    seen = {}
+
+    def fake(x, y, w, h, cursor=False):
+        seen["rect"] = (x, y, w, h)
+        return Image.new("RGB", (w, h))
+
+    def _boom():
+        raise AssertionError("grab_root must not be used when a region grab works")
+
+    monkeypatch.setattr(x11capture, "_mss_grab", fake)
+    monkeypatch.setattr(x11capture, "grab_root", _boom)
+    im = x11capture.grab_region(100, 50, 400, 300)
+    assert im is not None and im.size == (400, 300)
+    assert seen["rect"] == (100, 50, 400, 300)
