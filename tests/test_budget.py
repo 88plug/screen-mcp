@@ -200,3 +200,44 @@ def test_reserve_bytes_has_a_floor(restore_cap):
     img = _shot()
     out, _, _ = budget.fit_to_budget(img, _lossless(img), _downscale, reserve_bytes=0)
     assert budget.b64_len(len(out)) <= 20 * 1024 - 512
+
+
+def test_tiny_cap_still_shrinks_instead_of_shipping_the_full_payload(restore_cap):
+    """A cap at or below the envelope reserve made `budget` go negative, and the early
+    `budget <= 0` return then shipped the FULL over-cap payload unshrunk — the exact drop
+    this module exists to prevent. The usable budget is now floored at cap/4."""
+    budget.MAX_OUT_KB = 2  # == ENVELOPE_BYTES, so cap - reserve == 0
+    img = _shot()
+    raw = _lossless(img)
+    out, note, size = budget.fit_to_budget(img, raw, _downscale)
+    assert out is not raw, "must not return the full payload for a tiny cap"
+    assert budget.b64_len(len(out)) < budget.b64_len(len(raw))
+    assert size != img.size
+    Image.open(io.BytesIO(out)).load()
+
+
+def test_budget_utilisation_holds_for_incompressible_content(restore_cap):
+    """The one-way estimate undershot to 8% of the allowed budget on noise, shipping a
+    needlessly unreadable image. The binary search must use most of the cap regardless of
+    how well the content compresses."""
+    budget.MAX_OUT_KB = 20
+    usable = 20 * 1024 - budget.ENVELOPE_BYTES
+    for label, img in (
+        ("noise", Image.effect_noise((2576, 1449), 90).convert("RGB")),
+        ("structured", _shot()),
+    ):
+        out, _, _ = budget.fit_to_budget(img, _lossless(img), _downscale)
+        got = budget.b64_len(len(out))
+        assert got <= usable, f"{label} exceeded the cap"
+        assert got > usable * 0.6, (
+            f"{label} used only {100 * got // usable}% of the budget"
+        )
+
+
+def test_malformed_env_does_not_crash_at_import(monkeypatch):
+    """A bare int() on the env var took the whole server down at import time."""
+    for bad in ("not-a-number", "", "12.5", "-3"):
+        monkeypatch.setenv("MCP_SCREEN_MAX_OUTPUT_KB", bad)
+        assert isinstance(budget._env_int("MCP_SCREEN_MAX_OUTPUT_KB", 0), int)
+    monkeypatch.setenv("MCP_SCREEN_MAX_OUTPUT_KB", "-5")
+    assert budget._env_int("MCP_SCREEN_MAX_OUTPUT_KB", 0) >= 0

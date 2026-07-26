@@ -16,11 +16,20 @@ worse than a low-fidelity image. So shrink until it fits.
 import io
 import os
 
+
+def _env_int(name, default):
+    """A malformed env value must degrade, not crash the server at import time."""
+    try:
+        return max(0, int(os.environ.get(name, "") or default))
+    except (TypeError, ValueError):
+        return default
+
+
 #: 0 = unlimited (Claude's limit is 10MB/image, far above any shot we produce). Set from the
 #: `initialize` handshake's clientInfo by server._apply_client_limits, or via the env var.
 #: This module owns the value; capture and server both read/write it HERE so there is one
 #: source of truth rather than two drifting copies.
-MAX_OUT_KB = int(os.environ.get("MCP_SCREEN_MAX_OUTPUT_KB", "0"))
+MAX_OUT_KB = _env_int("MCP_SCREEN_MAX_OUTPUT_KB", 0)
 
 #: Default headroom for the accompanying text block + JSON envelope. Callers that know how
 #: much text they will emit alongside the image should pass `reserve_bytes` instead — an
@@ -57,48 +66,58 @@ def fit_to_budget(out, raw, downscale, max_out_kb=None, reserve_bytes=None):
     if not cap:
         return raw, "", out.size
     reserve = ENVELOPE_BYTES if reserve_bytes is None else max(reserve_bytes, 512)
-    budget = cap * 1024 - reserve
-    if budget <= 0 or b64_len(len(raw)) <= budget:
+    # Never let the reserve swallow the whole cap: a small cap used to make `budget` <= 0,
+    # which returned the FULL over-cap payload unshrunk — the exact drop this prevents.
+    # Floor the usable budget at a quarter of the cap and shrink into it instead.
+    budget = max(cap * 1024 - reserve, (cap * 1024) // 4)
+    if b64_len(len(raw)) <= budget:
         return raw, "", out.size
 
-    w0, h0 = out.size
+    ow, oh = out.size
     q = _START_QUALITY
 
     def enc(scale):
-        w, h = max(1, round(w0 * scale)), max(1, round(h0 * scale))
+        """Encode at `scale` of the ORIGINAL size. Always measured from `out`, never from a
+        previous candidate — chaining scales off a mutated size is what made the earlier
+        estimate-then-grow version undershoot to 8% of the allowed budget."""
+        w, h = max(1, round(ow * scale)), max(1, round(oh * scale))
         im = out if scale >= 1.0 else downscale(out, w, h)
         b = io.BytesIO()
         im.convert("RGB").save(b, format="WEBP", quality=q, method=4)
         return b.getvalue(), w, h
 
-    # Encoded size tracks pixel count, so one lossy probe predicts the scale that fits:
-    # area_ratio = budget/actual, and scale is its square root. A fixed ladder either
-    # overshoots the cliff (wasting half the budget on a needlessly blurry image) or
-    # burns six encodes getting there.
-    cand, w, h = enc(1.0)
-    # The estimate converges in 1-2 steps on real screenshots, but aliasing can make a
-    # downscale encode LARGER than predicted. Fall back to halving so fitting is
-    # GUARANTEED, not merely likely — returning an over-budget payload is the exact
-    # failure this function exists to prevent.
-    for i in range(12):
-        got = b64_len(len(cand))
-        if got <= budget:
-            return (
-                cand,
-                (
-                    f" [shrunk to {len(cand) // 1024}KB ({w}x{h}, q{q}) to fit this "
-                    f"client's {cap}KB tool-output cap — use region=[x,y,w,h] for a "
-                    f"crisp zoom]"
-                ),
-                (w, h),
-            )
-        if min(w, h) <= 8:
+    # Binary search for the LARGEST scale that fits. Monotone in scale, so ~9 encodes pin it
+    # to ~0.2% precision — and unlike a one-way estimate it cannot undershoot on
+    # hard-to-compress content (noise, photos), where encoded size does not track pixel
+    # count the way a single probe predicts.
+    lo, hi = 0.0, 1.0
+    best = None
+    for _ in range(9):
+        mid = (lo + hi) / 2
+        cand, w, h = enc(mid)
+        if b64_len(len(cand)) <= budget:
+            best = (cand, w, h)
+            lo = mid
+        else:
+            hi = mid
+        if min(w, h) <= 8 and best is None:
             break
-        scale = min(0.95, (budget / got) ** 0.5 * 0.92) if i < 3 else 0.6
-        cand, w, h = enc(scale)
-        w0, h0 = w, h
 
-    # Floor reached and still over: send it anyway and say so, rather than silently lying.
+    if best is not None:
+        cand, w, h = best
+        return (
+            cand,
+            (
+                f" [shrunk to {len(cand) // 1024}KB ({w}x{h}, q{q}) to fit this "
+                f"client's {cap}KB tool-output cap — use region=[x,y,w,h] for a "
+                f"crisp zoom]"
+            ),
+            (w, h),
+        )
+
+    # Nothing fits, even at the floor: send the smallest we produced and say so, rather
+    # than silently shipping something the client will drop.
+    cand, w, h = enc(max(8 / max(ow, 1), 8 / max(oh, 1)))
     return (
         cand,
         (

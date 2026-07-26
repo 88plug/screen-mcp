@@ -4,6 +4,40 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
 
 ## Unreleased
 
+- **The OCR thread cap was INERT in the live server.** `warmup()` constructed `RapidOCR()`
+  with no params and, running first at startup, won the double-checked `_OCR` init — so the
+  cap only ever applied in benchmarks that happened to call `ocr_boxes` first. There is now
+  one constructor, `_build_ocr()`, used by both paths; verified that a warmup-built engine
+  reports `intra_op_num_threads = 6`. Re-measured fairly on the production path (loadavg 25,
+  same frame, back to back): uncapped 31.2s wall / 346s CPU vs capped 14.1s wall / 92s CPU,
+  123 boxes either way — **2.2x wall, 3.8x CPU**. The previously reported "85s -> 40.6s live"
+  was measured through a path production did not take and was largely load variance.
+- **A non-dict `params` killed the server mid-handshake.** `_apply_client_limits` ran
+  outside any try/except in the stdin loop, so `{"clientInfo": "grok"}` raised AttributeError
+  before `initialize` was answered — the client hung on a server that exited with no
+  diagnostic. Now fully defensive and fail-open.
+- **`fit_to_budget` now binary-searches the scale.** The one-way estimate could only step
+  down, so hard-to-compress content collapsed to 8% of the allowed budget — a needlessly
+  unreadable image. Searching for the largest fitting scale against the ORIGINAL image gets
+  97-99% utilisation on noise, structured UI, and photo-like frames alike.
+- **A cap at or below the envelope reserve shipped the full payload.** `budget = cap - reserve`
+  went negative and the early `budget <= 0` return handed back the unshrunk image — exactly
+  the drop this module prevents. Usable budget is floored at cap/4.
+- **`MCP_SCREEN_MAX_OUTPUT_KB` / `MCP_SCREEN_CPU_THREADS` no longer crash on bad input.**
+  A bare `int()` at import time took the server down; malformed values now degrade.
+- **`region` + `monitor` is clipped to that monitor.** The translation added the origin but
+  never bounded the box, so an oversized or offset region silently read the neighbouring
+  monitor's pixels — a valid-looking crop of the wrong screen. The `_REGION` tool schema now
+  documents the monitor-relative meaning instead of contradicting it.
+- **`run-python.sh` can no longer stop the server from starting.** Provisioning runs with
+  errexit disabled: a leftover `.venv` made `.venv/bin/python -m pip` invoke a binary that
+  does not exist, and the launcher died 127 with no diagnostic — permanently, since every
+  relaunch re-entered the same branch. Also: the hard deps install synchronously while the
+  ~200MB grounding backends finish in the background (inline they ran past the MCP client's
+  startup timeout); explicit `EIGHTYEIGHT_PYTHON` / `PLUGIN_PYTHON` / `SCREEN_PYTHON`
+  overrides are honoured outright rather than being discarded for lacking `gi`; and a
+  pre-existing venv without `--system-site-packages` is left ALONE (never deleted) and
+  bypassed via `--target`.
 - **Fitted screenshots advertised the WRONG view transform — every capped-client click
   missed by the shrink ratio.** `encode_store` stamped `SESSION["view"]` (scale/dw/dh) and
   the response text BEFORE `fit_to_budget` re-encoded the image smaller, so the client

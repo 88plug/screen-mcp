@@ -62,9 +62,15 @@ find_python() {
   local c root
   root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+  # Explicit operator overrides win OUTRIGHT — they are documented as "first match,
+  # version-gated", so gating them on gi too would silently discard a deliberate choice
+  # and fall through to some other interpreter the operator did not ask for.
+  local _rg="$REQUIRE_GI"
+  REQUIRE_GI=0
   for c in "${EIGHTYEIGHT_PYTHON:-}" "${PLUGIN_PYTHON:-}" "${SCREEN_PYTHON:-}"; do
-    _try "$c" && return 0
+    if _try "$c"; then REQUIRE_GI="$_rg"; return 0; fi
   done
+  REQUIRE_GI="$_rg"
 
   if [ -n "${VIRTUAL_ENV:-}" ]; then
     for c in "${VIRTUAL_ENV}/bin/python3" "${VIRTUAL_ENV}/bin/python"; do
@@ -157,6 +163,12 @@ _system_layer_hint() {
   fi
 }
 
+# errexit is disabled for the whole provisioning block. Every command in here is
+# best-effort: a failed `pip`, a missing `.venv/bin/python`, an offline box — none of them
+# may prevent the final `exec "$PY" "$@"`. Before this, a leftover .venv directory made
+# `.venv/bin/python -m pip` run a binary that does not exist and the launcher died 127 with
+# no diagnostic, permanently (every relaunch re-entered the same branch).
+set +e
 if [ "${MCP_SCREEN_NO_AUTO_DEPS:-0}" != "1" ]; then
   VENV="${ROOT}/.venv"
   MODE="${MCP_SCREEN_AUTO_DEPS:-full}"
@@ -224,31 +236,51 @@ if [ "${MCP_SCREEN_NO_AUTO_DEPS:-0}" != "1" ]; then
     PYTHONPATH="${DEPS}${PYTHONPATH:+:$PYTHONPATH}" "$PY" -c 'import numpy, PIL' >/dev/null 2>&1
   }
 
+  # Install the HARD deps synchronously (small, and the server cannot import without
+  # them), then finish the heavy optional set in the BACKGROUND. onnxruntime alone is
+  # ~200MB; doing it inline on first launch ran past the MCP client's server-startup
+  # timeout, so the client gave up before `initialize` could be answered. Grounding lights
+  # up a little after startup instead of blocking it.
+  if [ "$MODE" != "core" ] && ! _have_hard_deps "$PY" && [ ! -f "$STAMP" ]; then
+    REQ_SYNC="${ROOT}/requirements-core.txt"
+    REQ_BG="$REQ"
+  else
+    REQ_SYNC="$REQ"
+    REQ_BG=""
+  fi
+
   if ! _satisfied "$PY" && [ ! -f "$STAMP" ] && [ -f "$REQ" ]; then
-    echo "screen-mcp: provisioning Python deps (one time, ~200MB) ..." >&2
+    echo "screen-mcp: provisioning Python deps ..." >&2
     # --system-site-packages is LOAD-BEARING: gi/GStreamer are system packages a plain
     # venv would hide, and the server dies with "No module named 'gi'" (verified).
     # Only reuse an existing venv if it can still see the system layer. A tree left by an
     # interrupted run — or created without --system-site-packages — otherwise short-circuits
     # creation, gets the stamp written, and permanently locks the server onto an interpreter
     # that cannot import gi.
-    if [ -d "$VENV" ] && [ "$REQUIRE_GI" = "1" ] \
+    # An existing venv that cannot see the system layer is useless to us — but it may be
+    # the user's own, so do NOT delete it. Skip it and provision via --target instead.
+    _SKIP_VENV=0
+    if [ -d "$VENV" ] \
        && ! "${VENV}/bin/python" -c 'import importlib.util as u,sys; sys.exit(0 if u.find_spec("gi") else 1)' >/dev/null 2>&1; then
-      echo "screen-mcp: existing ${VENV} cannot import gi; rebuilding with --system-site-packages" >&2
-      if [ -n "${ROOT:-}" ] && [ "$VENV" = "${ROOT}/.venv" ]; then rm -rf "${ROOT}/.venv"; fi
+      echo "screen-mcp: existing ${VENV} cannot import gi (left as-is); using ${DEPS}" >&2
+      _SKIP_VENV=1
     fi
-    if ! { [ -d "$VENV" ] || "$PY" -m venv --system-site-packages "$VENV" >/dev/null 2>&1; }; then
+    if [ ! -d "$VENV" ]; then _VENV_OURS=1; fi
+    if [ "$_SKIP_VENV" = "1" ] \
+       || ! { [ -d "$VENV" ] || "$PY" -m venv --system-site-packages "$VENV" >/dev/null 2>&1; }; then
       # A FAILED `venv` still leaves a partial tree behind (it dies at the ensurepip step
       # after writing bin/python). That stub does NOT inherit system site-packages, so it
       # hides gi — and being at $ROOT/.venv it then WINS interpreter selection, turning a
       # recoverable miss into "No module named 'gi'". Remove it. Guarded: exact literal
       # path under ROOT, created by this script, never a variable-built path.
-      if [ -n "${ROOT:-}" ] && [ "$VENV" = "${ROOT}/.venv" ] && [ -d "$VENV" ]; then
+      # Only remove a venv THIS run created. A user's own hand-built .venv must never be
+      # deleted without asking — we degrade to --target instead.
+      if [ "${_VENV_OURS:-0}" = "1" ] && [ -n "${ROOT:-}" ] && [ "$VENV" = "${ROOT}/.venv" ]; then
         rm -rf "${ROOT}/.venv"
       fi
       # No venv module. Layer deps onto the current (gi-capable) interpreter instead.
       echo "screen-mcp: venv unavailable; installing into ${DEPS} instead ..." >&2
-      _provision_target "$REQ" || _provision_target "${ROOT}/requirements-core.txt" || {
+      _provision_target "$REQ_SYNC" || _provision_target "${ROOT}/requirements-core.txt" || {
         echo "screen-mcp: dep provisioning FAILED (offline, or no pip)." >&2
         echo "  ${PY} -m pip install --target ${DEPS} -r ${REQ}" >&2
       }
@@ -260,7 +292,12 @@ if [ "${MCP_SCREEN_NO_AUTO_DEPS:-0}" != "1" ]; then
       fi
     elif true; then
       "${VENV}/bin/python" -m pip install --quiet --upgrade pip >&2 2>/dev/null
-      if "${VENV}/bin/python" -m pip install --quiet -r "$REQ" >&2; then
+      if "${VENV}/bin/python" -m pip install --quiet -r "$REQ_SYNC" >&2; then
+        if [ -n "$REQ_BG" ]; then
+          echo "screen-mcp: installing grounding backends in the background ..." >&2
+          nohup "${VENV}/bin/python" -m pip install --quiet -r "$REQ_BG" \
+            >/dev/null 2>&1 &
+        fi
         : > "$STAMP"
         # evdev separately and best-effort: it builds against kernel headers and its
         # failure must never sink the grounding stack (it did — measured). Prefer the
@@ -295,6 +332,7 @@ if [ "${MCP_SCREEN_NO_AUTO_DEPS:-0}" != "1" ]; then
   fi
 fi
 
+set -e
 # Last gate: the un-shippable system layer. Report it precisely rather than letting the
 # server die later on an opaque ImportError deep in capture.py.
 if ! "$PY" -c 'import gi' >/dev/null 2>&1; then

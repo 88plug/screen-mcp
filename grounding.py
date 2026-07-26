@@ -118,6 +118,25 @@ def _quad_to_bbox(quad):
 # ---------------------------------------------------------------------------
 # OCR backend
 # ---------------------------------------------------------------------------
+def _build_ocr():
+    """The ONLY place RapidOCR is constructed. warmup() previously called RapidOCR() with
+    no params and, running first at startup, won the double-checked init — so the thread
+    cap below never applied in the live server and only showed up in benchmarks that
+    happened to call ocr_boxes first. One constructor, no second uncapped path.
+
+    Cap ONNX threads, exactly as _omni_session() does. Left at RapidOCR's default
+    (intra_op=-1 -> one thread per core) a single 4K read burned 610 CPU-SECONDS for 55s of
+    wall: the threads spin-wait rather than progress, so it was both slower AND starving the
+    rest of the desktop. Measured on 24 cores: auto=55.5s wall/610s cpu,
+    6 threads=25.9s wall/161s cpu. Fewer threads is faster here."""
+    return RapidOCR(
+        params={
+            "EngineConfig.onnxruntime.intra_op_num_threads": _CPU_THREADS,
+            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+        }
+    )
+
+
 def ocr_boxes(bgr):
     """Run text detection+recognition on a BGR ndarray.
 
@@ -130,18 +149,7 @@ def ocr_boxes(bgr):
         if _OCR is None:
             with _OCR_LOCK:  # double-checked: a second concurrent caller must not build a second engine
                 if _OCR is None:
-                    # Cap ONNX threads, exactly as _omni_session() already does. Left at
-                    # RapidOCR's default (intra_op=-1 -> one thread per core) a single 4K
-                    # read burned 610 CPU-SECONDS for 55s of wall — the threads spin-wait
-                    # rather than progress, so it was both slower AND starving the rest of
-                    # the desktop. Measured on 24 cores: auto=55.5s wall/610s cpu,
-                    # 6 threads=25.9s wall/161s cpu. Fewer threads is faster here.
-                    _OCR = RapidOCR(
-                        params={
-                            "EngineConfig.onnxruntime.intra_op_num_threads": _CPU_THREADS,
-                            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
-                        }
-                    )
+                    _OCR = _build_ocr()
         res = _OCR(bgr)
     except Exception:
         return []
@@ -278,7 +286,7 @@ def warmup():
                 _OCR_LOCK
             ):  # match ocr_boxes()' double-checked init so warmup races safely
                 if _OCR is None:
-                    _OCR = RapidOCR()
+                    _OCR = _build_ocr()
                     _OCR(np.zeros((48, 48, 3), dtype=np.uint8))  # prime det+rec graphs
     except Exception:
         pass

@@ -1379,7 +1379,10 @@ def tool_do(args):
 _REGION = {
     "type": "array",
     "items": {"type": "number"},
-    "description": "[x,y,w,h] desktop px to crop/zoom",
+    "description": (
+        "[x,y,w,h] to crop/zoom. Desktop-absolute px on its own; when `monitor` is also "
+        "given the box is RELATIVE to that monitor's origin and is clipped to it."
+    ),
 }
 _SHOT = {"type": "boolean", "description": "return a screenshot after the action"}
 _SPACE = {
@@ -1881,14 +1884,21 @@ _CLIENT_OUT_KB = {"grok": 20}
 
 
 def _apply_client_limits(params):
-    if os.environ.get("MCP_SCREEN_MAX_OUTPUT_KB"):
-        return  # operator set it explicitly — don't second-guess
-    name = str((params.get("clientInfo") or {}).get("name", "")).lower()
-    for key, kb in _CLIENT_OUT_KB.items():
-        if key in name:
-            budget.MAX_OUT_KB = kb
-            state.log(f"client '{name}': capping tool output at {kb}KB")
-            return
+    """Never raise: this runs INSIDE the stdin loop before `initialize` is answered, so an
+    exception here kills the server mid-handshake with no reply and no diagnostic. `params`
+    and `clientInfo` come straight off the wire and are not guaranteed to be dicts."""
+    try:
+        if os.environ.get("MCP_SCREEN_MAX_OUTPUT_KB"):
+            return  # operator set it explicitly — don't second-guess
+        info = params.get("clientInfo") if isinstance(params, dict) else None
+        name = str(info.get("name", "") if isinstance(info, dict) else "").lower()
+        for key, kb in _CLIENT_OUT_KB.items():
+            if key in name:
+                budget.MAX_OUT_KB = kb
+                state.log(f"client '{name}': capping tool output at {kb}KB")
+                return
+    except Exception as e:  # noqa: BLE001 - fail open; a cap is an optimization
+        state.log(f"client-limit detection skipped: {type(e).__name__}: {e}")
 
 
 def main():

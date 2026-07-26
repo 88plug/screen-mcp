@@ -1199,6 +1199,12 @@ def capture_desktop(region=None, monitor=None, fresh=False):
         )
         m = geo[int(monitor)]
         rx, ry, rw, rh = (int(v) for v in region)
+        # Clip to the named monitor. Without this an oversized or offset box silently
+        # spills onto the neighbouring monitor and the caller gets pixels from a screen
+        # it did not ask for — worse than an error, because it looks like a valid crop.
+        rx, ry = max(0, rx), max(0, ry)
+        rw = max(1, min(rw, m["w"] - rx))
+        rh = max(1, min(rh, m["h"] - ry))
         region, monitor = [m["x"] + rx, m["y"] + ry, rw, rh], None
     validate_scope(
         geo, state.SESSION.get("W") or 0, state.SESSION.get("H") or 0, region, monitor
