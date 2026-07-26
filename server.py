@@ -1871,6 +1871,25 @@ def reply(mid, result=None, error=None):
     sys.stdout.flush()
 
 
+# Per-client tool-output caps, applied from the `initialize` handshake so the user never
+# has to configure anything. Grok Build truncates a tool result at 20KB, which cuts a base64
+# image mid-string; it then rejects the whole image ("integrity check failed: image bytes are
+# truncated") and the model sees nothing. Detect it and fit the payload instead.
+# Verified against Grok Build 0.2.112. An explicit env override always wins.
+_CLIENT_OUT_KB = {"grok": 20}
+
+
+def _apply_client_limits(params):
+    if os.environ.get("MCP_SCREEN_MAX_OUTPUT_KB"):
+        return  # operator set it explicitly — don't second-guess
+    name = str((params.get("clientInfo") or {}).get("name", "")).lower()
+    for key, kb in _CLIENT_OUT_KB.items():
+        if key in name:
+            capture.MAX_OUT_KB = kb
+            state.log(f"client '{name}': capping tool output at {kb}KB")
+            return
+
+
 def main():
     import threading
     import atexit
@@ -1907,6 +1926,7 @@ def main():
             mid = msg.get("id")
             method = msg.get("method")
             if method == "initialize":
+                _apply_client_limits(msg.get("params") or {})
                 reply(
                     mid,
                     {

@@ -65,6 +65,13 @@ LANCZOS = Image.Resampling.LANCZOS
 WEBP_METHOD = int(os.environ.get("MCP_SCREEN_WEBP_METHOD", "0"))
 WEBP_EFFORT = int(os.environ.get("MCP_SCREEN_WEBP_EFFORT", "20"))
 
+# Some MCP clients hard-cap tool-result size. Grok Build truncates at 20KB, which cuts a
+# base64 image mid-string; the client then rejects it ("image bytes are truncated") and the
+# model sees NOTHING AT ALL — strictly worse than a low-fidelity image. When a cap is set we
+# shrink until the encoded payload fits, so the agent always gets something to look at.
+# 0 = unlimited (Claude's limit is 10MB/image, far above any shot we produce).
+MAX_OUT_KB = int(os.environ.get("MCP_SCREEN_MAX_OUTPUT_KB", "0"))
+
 # Gst.init is binding-version-fragile: older PyGObject accepts None; GStreamer/
 # gobject-introspection >= 1.28 rejects it ("Argument 1 does not allow None as a
 # value") and requires a list; other builds raise different errors. Try both and
@@ -1258,6 +1265,62 @@ def _downscale(img, w, h):
     return Image.fromarray(out, img.mode)
 
 
+def _b64_len(n):
+    """Encoded size of n raw bytes — the number the client's cap actually applies to."""
+    return ((n + 2) // 3) * 4
+
+
+def _fit_to_budget(out, raw):
+    """Shrink `out` until its base64 fits MAX_OUT_KB, returning (raw, note).
+
+    Lossless WebP of a 4K desktop is ~900KB encoded; a 20KB cap needs ~45x less, so we go
+    lossy AND smaller. Degrading is the whole point — a blurry overview the model can see
+    beats a crisp one the client throws away. Region shots are usually already under the
+    cap and skip this entirely."""
+    if not MAX_OUT_KB:
+        return raw, ""
+    budget = MAX_OUT_KB * 1024 - 2048  # headroom for the text block + JSON envelope
+    if budget <= 0 or _b64_len(len(raw)) <= budget:
+        return raw, ""
+    w0, h0 = out.size
+    q = 60
+
+    def enc(scale):
+        w, h = max(1, round(w0 * scale)), max(1, round(h0 * scale))
+        im = out if scale >= 1.0 else _downscale(out, w, h)
+        b = io.BytesIO()
+        im.convert("RGB").save(b, format="WEBP", quality=q, method=4)
+        return b.getvalue(), w, h
+
+    # Encoded size tracks pixel count, so one lossy probe predicts the scale that fits:
+    # area_ratio = budget/actual, and scale is its square root. A fixed ladder either
+    # overshoots the cliff (wasting half the budget on a needlessly blurry image) or
+    # burns six encodes getting there.
+    cand, w, h = enc(1.0)
+    # The estimate converges in 1-2 steps on real screenshots, but aliasing can make a
+    # downscale encode LARGER than predicted. Fall back to halving so fitting is
+    # guaranteed, not merely likely — returning an over-budget payload is the exact
+    # failure this function exists to prevent.
+    for i in range(12):
+        got = _b64_len(len(cand))
+        if got <= budget:
+            return cand, (
+                f" [shrunk to {len(cand) // 1024}KB ({w}x{h}, q{q}) to fit this client's "
+                f"{MAX_OUT_KB}KB tool-output cap — use region=[x,y,w,h] for a crisp zoom]"
+            )
+        if min(w, h) <= 8:
+            break
+        scale = min(0.95, (budget / got) ** 0.5 * 0.92) if i < 3 else 0.6
+        cand, w, h = enc(scale)
+        w0, h0 = w, h
+    best = cand
+    # Floor reached and still over: send it anyway and say so, rather than silently lying.
+    return best, (
+        f" [WARNING: {_b64_len(len(best)) // 1024}KB still exceeds the {MAX_OUT_KB}KB cap; "
+        f"the client may drop this image — use region=[x,y,w,h] to capture less]"
+    )
+
+
 def encode_store(img, ox, oy, label, t0, max_edge=None):
     """Downscale to <=max_edge (default state.MAX_EDGE) long edge, remember the view->desktop
     transform, encode WebP. Pass a smaller max_edge for tour thumbnails (fewer tokens). For
@@ -1298,6 +1361,8 @@ def encode_store(img, ox, oy, label, t0, max_edge=None):
         )
     _enc.__exit__(None, None, None)
     raw = buf.getvalue()
+    with state.stage("fit"):
+        raw, budget_note = _fit_to_budget(out, raw)
     ms = int((time.time() - t0) * 1000)
     txt = (
         f"{label}: view#{vid} {out.width}x{out.height} (scale {scale:.4f}) covering desktop "
@@ -1305,6 +1370,7 @@ def encode_store(img, ox, oy, label, t0, max_edge=None):
         f"Click with space='view' using coords as seen here (pass view_id={vid} to bind "
         f"the click to THIS screenshot)."
     )
+    txt += budget_note
     txt += _stale_note(
         ox, oy, dw, dh
     )  # flag a possibly-stale static monitor — never report old pixels as live
