@@ -16,7 +16,7 @@ opencv-python-headless>=4.8 # letterbox/NMS for OmniParser, classical CV fallbac
 
 # DEV — test runner. The conftest stubs heavy modules so tests run without a live
 # D-Bus session; install just this to run `pytest -q`.
-pytest>=8.0
+pytest>=9.1.1
 
 # ---------------------------------------------------------------------------
 # SYSTEM DEPENDENCIES (NOT installable via pip — install via the OS package manager)
