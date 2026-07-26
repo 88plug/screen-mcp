@@ -45,4 +45,4 @@ pytest>=8.0
 #
 # Models: the OmniParser ONNX (~11.6MB) is bundled at models/onnx/model.onnx.
 # RapidOCR downloads its detection + recognition models on first use into ~/.cache/.
-evdev>=1.6          # kernel-level uinput input backend (absolute pointer + hi-res wheel + keys)
+evdev>=1.9.3          # kernel-level uinput input backend (absolute pointer + hi-res wheel + keys)
