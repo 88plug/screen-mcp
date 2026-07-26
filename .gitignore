@@ -26,3 +26,6 @@ EVAL_REPORT.md
 #   /tmp/screen_err.txt                         last unhandled tool traceback
 .deps/
 .provisioned-*
+
+# vmbed VM overlays live in ~/.cache, never in-tree
+tests/vmbed/*.qcow2
