@@ -4,6 +4,16 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
 
 ## Unreleased
 
+- **`screen_diag` no longer misdiagnoses non-Wayland sessions.** The session check hard-failed
+  anything without `WAYLAND_DISPLAY` as "screen-mcp targets GNOME on Wayland only", which
+  hides the actual blocker. Measured on a real GNOME/**X11** box (Zorin OS 15.3): what stops
+  us there is `xdg-desktop-portal` being absent (0 ScreenCast/RemoteDesktop interfaces on
+  the bus), GStreamer 1.14 lacking appsink `leaky-type` (our exact pipeline errors with
+  `no property "leaky-type"`), and Python 3.8 vs our 3.10 floor — none of which is "X11".
+  Capture rides the portal and input rides uinput; neither is Wayland-specific. The session
+  row is now informational (`ok` on Wayland, `warn` + a pointer on X11) and the portal /
+  GStreamer / uinput rows remain the real gate. X11 is still not claimed as supported — it
+  is untested end-to-end, and that is now what the tool says rather than a wrong reason.
 - **The client cap now applies to the whole tool RESULT, not each image.** `screen_tour`
   emits one thumbnail per stop in a single result; fitting each to the full cap shipped
   N x cap and the client truncated the lot. The cap is split across stops, and once the

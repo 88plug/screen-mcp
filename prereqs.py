@@ -93,21 +93,35 @@ def check_gstreamer():
         )
 
 
-def check_wayland():
+def check_session():
+    """Report the session type WITHOUT pretending it is the blocker.
+
+    This used to hard-fail any non-Wayland session with "targets GNOME on Wayland only",
+    which misdiagnoses every real failure. Measured on a GNOME/X11 box (Zorin 15.3):
+    what actually stops us there is xdg-desktop-portal being absent (0 ScreenCast /
+    RemoteDesktop interfaces on the bus), GStreamer 1.14 lacking appsink `leaky-type`, and
+    Python 3.8 — none of which is "X11". Capture rides the portal and input rides uinput,
+    and neither is Wayland-specific. So: session type is INFORMATIONAL; the portal and
+    GStreamer checks are the ones that decide, and they already exist below.
+    """
     wl = os.environ.get("WAYLAND_DISPLAY")
     xdg = (os.environ.get("XDG_SESSION_TYPE") or "").lower()
     if wl or xdg == "wayland":
+        return _entry("session", "ok", f"wayland (WAYLAND_DISPLAY={wl or 'set'})", None)
+    if xdg == "x11" or os.environ.get("DISPLAY"):
         return _entry(
-            "wayland",
-            "ok",
-            f"session type wayland (WAYLAND_DISPLAY={wl or 'set'})",
-            None,
+            "session",
+            "warn",
+            f"X11 session (XDG_SESSION_TYPE={xdg or 'unset'}, DISPLAY="
+            f"{os.environ.get('DISPLAY') or 'unset'})",
+            "X11 is untested end-to-end. Capture needs the ScreenCast portal and input "
+            "needs uinput — see the portal/uinput rows, which are the real gate.",
         )
     return _entry(
-        "wayland",
-        "fail",
-        f"XDG_SESSION_TYPE={xdg or '(unset)'}; WAYLAND_DISPLAY unset",
-        "screen-mcp targets GNOME on Wayland only",
+        "session",
+        "warn",
+        f"no graphical session detected (XDG_SESSION_TYPE={xdg or '(unset)'})",
+        "Run inside a desktop session; see the portal row for what is actually missing.",
     )
 
 
@@ -242,7 +256,7 @@ _CHECKS = (
     check_python_deps,
     check_pygobject,
     check_gstreamer,
-    check_wayland,
+    check_session,
     check_portal_bus,
     check_portal_token,
     check_window_info,
