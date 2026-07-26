@@ -1189,6 +1189,18 @@ def capture_desktop(region=None, monitor=None, fresh=False):
             region = json.loads(region)
         except Exception:
             region = None
+    # `monitor` returned early and silently DROPPED `region`: asking for
+    # region=[0,0,600,300] with monitor=0 handed back the whole 3840x2160 monitor with no
+    # error — a plausible-but-wrong result, the worst kind (found driving Grok Build).
+    # Together they now mean "this box, relative to that monitor's origin", which is what
+    # the combination reads as and is strictly more useful than ignoring one of them.
+    if monitor is not None and region:
+        validate_scope(
+            geo, state.SESSION.get("W") or 0, state.SESSION.get("H") or 0, None, monitor
+        )
+        m = geo[int(monitor)]
+        rx, ry, rw, rh = (int(v) for v in region)
+        region, monitor = [m["x"] + rx, m["y"] + ry, rw, rh], None
     validate_scope(
         geo, state.SESSION.get("W") or 0, state.SESSION.get("H") or 0, region, monitor
     )

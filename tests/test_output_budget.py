@@ -118,3 +118,52 @@ def test_explicit_env_override_beats_client_detection(restore_cap, monkeypatch):
     capture.MAX_OUT_KB = 99
     server._apply_client_limits({"clientInfo": {"name": "grok"}})
     assert capture.MAX_OUT_KB == 99
+
+
+# --- region + monitor precedence -------------------------------------------------------
+
+
+def test_region_with_monitor_is_translated_not_dropped(monkeypatch):
+    """region+monitor used to silently return the WHOLE monitor. Both together must mean
+    'this box, relative to that monitor's origin'."""
+    import capture as cap
+
+    geo = [
+        {"node": 1, "x": 0, "y": 0, "w": 3840, "h": 2160, "live": True},
+        {"node": 2, "x": 3840, "y": 0, "w": 3840, "h": 2160, "live": True},
+    ]
+    seen = {}
+
+    monkeypatch.setattr(cap, "ensure_geo", lambda force=False: geo)
+    monkeypatch.setattr(cap, "validate_scope", lambda *a, **k: None)
+    monkeypatch.setattr(cap, "monitors_for", lambda r: (seen.update(region=r), [geo[0]])[1])
+    monkeypatch.setattr(cap.state, "SESSION", {"W": 7680, "H": 2160})
+
+    class _Img:
+        def crop(self, box):
+            seen["crop"] = box
+            return self
+
+    monkeypatch.setattr(cap, "_full_canvas", lambda m: _Img())
+    monkeypatch.setattr(
+        cap, "grab", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("cold"))
+    )
+
+    cap.capture_desktop(region=[0, 0, 600, 300], monitor=1)
+    assert seen["region"] == [3840, 0, 600, 300], "region must be offset by monitor origin"
+    assert seen["crop"] == (3840, 0, 4440, 300)
+
+
+def test_region_alone_is_desktop_absolute(monkeypatch):
+    """The pre-existing contract: region with no monitor stays desktop-absolute."""
+    import capture as cap
+
+    geo = [{"node": 1, "x": 0, "y": 0, "w": 3840, "h": 2160, "live": True}]
+    seen = {}
+    monkeypatch.setattr(cap, "ensure_geo", lambda force=False: geo)
+    monkeypatch.setattr(cap, "validate_scope", lambda *a, **k: None)
+    monkeypatch.setattr(cap, "monitors_for", lambda r: (seen.update(region=r), [])[1])
+    monkeypatch.setattr(cap.state, "SESSION", {"W": 3840, "H": 2160})
+    with pytest.raises(RuntimeError):
+        cap.capture_desktop(region=[10, 20, 600, 300])
+    assert seen["region"] == [10, 20, 600, 300]
