@@ -1,20 +1,37 @@
 """atspi_tree.py — optional AT-SPI element source.
 
-OPT-IN, NEVER PRIMARY. Measured on a live GNOME session before writing this:
+OPT-IN, tried first, falls through silently.
 
-  apps exposed with toolkit-accessibility=false ......... 0
-  apps exposed right after setting it true ............... 0   (running apps read it at start)
-  apps exposed for an app LAUNCHED after enabling ........ 1   (full widget tree)
+CORRECTED CONCLUSION. The first version of this file claimed AT-SPI needs a global gsettings
+toggle *and* a restart of every app you want to drive, and therefore could never serve an
+already-open desktop. That was wrong, and the reason is worth recording: this development
+box disables accessibility outright in the environment —
 
-So AT-SPI requires a global gsettings toggle *and* restarting every app you want to drive.
-screen-mcp exists to operate the desktop the user ALREADY has open — their logged-in
-browser, their running chat app — and for those AT-SPI silently returns nothing. Making it
-the primary perception layer would replace a working OCR path with one that reports an empty
-screen and looks like a broken tool.
+    /etc/environment                      NO_AT_BRIDGE=1, GTK_A11Y=none
+    ~/.config/environment.d/noa11y.conf   NO_AT_BRIDGE=1, GTK_A11Y=none
 
-Where it IS a win: when a target app happens to expose accessibility, the tree gives exact
-roles, labels and bounds for ~nothing, against a multi-second OCR + icon-detection pass. So
-this module is a fast path that is tried first and falls through silently.
+which every freshly spawned process inherits. The measurement ("0 apps exposed") was real;
+the inference drawn from it was not. With those two variables unset, a newly launched app
+exposes a full widget tree immediately (verified: 110 actionable elements).
+
+What is actually true: GTK3 and GTK4 register with AT-SPI unconditionally at startup — GTK3
+via an unconditional `_gtk_accessibility_init()`, GTK4 whenever the bus address resolves,
+and `org.a11y.Bus.GetAddress` is ungated and starts the bus on demand. `NO_AT_BRIDGE=1` is
+the only thing that stops GTK3. Qt and Firefox likewise do not need a relaunch. Orca is the
+existence proof: it sets `org.a11y.Status IsEnabled=true` and then enumerates the
+ALREADY-RUNNING desktop, with no restart step anywhere in its codebase.
+
+The one genuine exception is Chromium/Electron web CONTENT: `IsEnabled` only brings up the
+browser chrome. The renderer escalates to full accessibility when a client touches
+`GetAttributes` / `GetRelationSet` on a node — or with `--force-renderer-accessibility`. A
+client that reads only role/name/children gets an empty web subtree and no error.
+
+Still NOT primary, for a different and narrower reason than first claimed: availability
+varies per app and per host config, and an empty tree is indistinguishable from an empty
+screen. OCR/OmniParser stays the path that always works; this is the accelerator that makes
+the common case cheap.
+
+Do NOT set `ScreenReaderEnabled` — on GNOME, gsd-a11y-settings mirrors it and starts Orca.
 
 Everything degrades to []: no Atspi typelib, no a11y bus, accessibility off, app not
 registered. Callers must treat an empty list as "no information", never as "empty screen".
@@ -41,57 +58,13 @@ _ATSPI = None
 _TRIED = False
 
 
-def _a11y_bus_present():
-    """Is there an accessibility bus to connect to?
-
-    This gate exists because `Atspi.init()` does not raise when the bus is missing — the
-    dbind layer prints "AT-SPI: Couldn't connect to accessibility bus" and calls abort(),
-    taking the whole MCP server with it (verified: SIGABRT with XDG_RUNTIME_DIR unset). A
-    Python try/except cannot catch abort(), so the only safe route is to not call init()
-    unless the bus is really there. Gio's D-Bus calls DO raise properly, so this probe is
-    safe on its own.
-    """
-    if os.environ.get("AT_SPI_BUS_ADDRESS"):
-        return True
-    try:
-        import gi
-
-        gi.require_version("Gio", "2.0")
-        from gi.repository import Gio
-
-        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-        res = bus.call_sync(
-            "org.freedesktop.DBus",
-            "/org/freedesktop/DBus",
-            "org.freedesktop.DBus",
-            "NameHasOwner",
-            _variant("(s)", ("org.a11y.Bus",)),
-            None,
-            Gio.DBusCallFlags.NONE,
-            2000,
-            None,
-        )
-        return bool(res.unpack()[0])
-    except Exception:
-        return False
-
-
-def _variant(sig, vals):
-    from gi.repository import GLib
-
-    return GLib.Variant(sig, vals)
-
-
 def _atspi():
-    """Import + init Atspi once. Returns the module or None.
-
-    Never called unless _a11y_bus_present() — see that docstring: a missing bus aborts the
-    process rather than raising."""
+    """Import + init Atspi once. Returns the module or None."""
     global _ATSPI, _TRIED
     if _TRIED:
         return _ATSPI
     _TRIED = True
-    if not ENABLED or not _a11y_bus_present():
+    if not ENABLED:
         return None
     try:
         import gi
@@ -99,7 +72,17 @@ def _atspi():
         gi.require_version("Atspi", "2.0")
         from gi.repository import Atspi
 
-        Atspi.init()
+        # atspi_init() RETURNS a status (0 ok, 1 already-inited, 2 no bus) and only
+        # g_warning()s — it does NOT abort. The abort lives in _atspi_bus(), reached by
+        # every SUBSEQUENT call, so the return code is the correct gate. Verified here:
+        # `Atspi.init()` with no bus -> 2, exit 0; then `get_desktop(0).get_child_count()`
+        # -> "dbind-ERROR: Couldn't connect to accessibility bus" + SIGABRT.
+        #
+        # This is strictly better than probing org.a11y.Bus over D-Bus: it also catches a
+        # bus name that is OWNED but whose socket is unreachable (AT_SPI_BUS_ADDRESS
+        # pointing at a dead path), which the name probe reports as healthy.
+        if Atspi.init() not in (0, 1):
+            return None
         _ATSPI = Atspi
     except Exception:
         _ATSPI = None
@@ -109,11 +92,17 @@ def _atspi():
 def toolkit_accessibility_enabled():
     """Read the GNOME toggle that gates whether apps register with AT-SPI at all.
 
-    Shelled out on purpose. `Gio.Settings.new()` calls abort() — not a Python exception —
-    when the dconf backend is unavailable (verified: SIGABRT under pytest with
-    XDG_RUNTIME_DIR unset, killing the interpreter mid-test). No try/except can catch that,
-    and it would take the whole MCP server down on a screen_diag from a headless or
-    minimal-desktop host. A subprocess can only fail.
+    Shelled out on purpose, but NOT for the reason first recorded here. The original note
+    blamed a missing dconf backend; that is measurably false — `GSETTINGS_BACKEND=nosuch`
+    falls back silently and `GSETTINGS_BACKEND=memory` does not help. What actually aborts
+    is a MISSING SCHEMA or a missing key: `Gio.Settings.new("org.example.not.installed")`
+    dies with `GLib-GIO-ERROR ** Settings schema ... is not installed` + SIGABRT, which no
+    try/except can catch, taking the MCP server down on a screen_diag from any host without
+    GNOME's schemas installed.
+
+    A subprocess can only fail, so the cost of being wrong is a None instead of a core dump.
+    (The in-process alternative is a SettingsSchemaSource lookup guard — see
+    prereqs.check_gsettings_key — which we use where a schema is expected to exist.)
 
     Returns True/False, or None when it cannot be determined."""
     exe = shutil.which("gsettings")
@@ -232,8 +221,11 @@ def diag():
         "toolkit_accessibility": toolkit_accessibility_enabled(),
         "apps_exposed": apps,
         "note": (
-            "0 apps is normal: GNOME's toolkit-accessibility must be ON *and* each app "
-            "restarted after that to register. AT-SPI is an accelerator for apps that do "
-            "expose it — OCR/OmniParser remains the path that always works."
+            "0 apps usually means accessibility is disabled for the SESSION, not that the "
+            "screen is empty. Check NO_AT_BRIDGE / GTK_A11Y in /etc/environment and "
+            "~/.config/environment.d/ — those block GTK from registering at all — then "
+            "org.a11y.Status IsEnabled. GTK/Qt/Firefox do NOT need an app restart; only "
+            "Chromium/Electron web content needs --force-renderer-accessibility. "
+            "OCR/OmniParser remains the path that always works."
         ),
     }

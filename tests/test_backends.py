@@ -6,6 +6,7 @@ never let an empty AT-SPI tree be mistaken for an empty screen.
 """
 
 import os
+from typing import Any, cast
 
 import pytest
 from PIL import Image
@@ -181,23 +182,30 @@ def test_env_overrides_are_read():
     )
 
 
-def test_atspi_never_touches_init_without_a_bus(monkeypatch):
-    """Atspi.init() ABORTS (not raises) when the a11y bus is missing, which would kill the
-    whole MCP server. The bus gate must be consulted first, and a False must short-circuit
-    before any Atspi import."""
-    calls = {"init": 0}
+def test_atspi_bails_on_the_init_return_code(monkeypatch):
+    """CORRECTED after measuring: `Atspi.init()` does NOT abort without a bus — it returns
+    2 and only g_warning()s (verified: init() -> 2, exit 0). The abort lives in the NEXT
+    call, `_atspi_bus()`, reached by every subsequent API.
 
-    def boom():
-        calls["init"] += 1
-        raise AssertionError("must not reach Atspi.init() without a bus")
-
+    So the correct gate is the RETURN CODE, not a D-Bus name probe. It is also strictly
+    better: a bus name can be owned while its socket is unreachable
+    (AT_SPI_BUS_ADDRESS=unix:path=/nonexistent), which a NameHasOwner probe calls healthy
+    and which then aborts."""
     monkeypatch.setattr(atspi_tree, "_TRIED", False)
     monkeypatch.setattr(atspi_tree, "_ATSPI", None)
     monkeypatch.setattr(atspi_tree, "ENABLED", True)
-    monkeypatch.setattr(atspi_tree, "_a11y_bus_present", lambda: False)
-    monkeypatch.setattr(atspi_tree, "_variant", boom)
-    assert atspi_tree._atspi() is None
-    assert calls["init"] == 0
+
+    import sys
+    import types
+
+    fake = cast(Any, types.ModuleType("gi.repository"))
+    fake.Atspi = types.SimpleNamespace(init=lambda: 2, get_desktop=_must_not_call)
+    monkeypatch.setitem(sys.modules, "gi.repository", fake)
+    assert atspi_tree._atspi() is None, "a non-0/1 init status must abort the gate"
+
+
+def _must_not_call(*_a, **_kw):
+    raise AssertionError("must not touch the bus after a failed init()")
 
 
 def test_toolkit_toggle_is_read_out_of_process(monkeypatch):

@@ -27,6 +27,15 @@
 #   was absent when this stack was first explored. VNC is also what screen-in-docker's rfb
 #   driver speaks, so the same MCP that drives GUI containers can drive these VMs.
 #
+# WHY THE GUEST MUST NOT IDLE-BLANK
+#   GNOME blanks after ~5 min without input and deactivates the CRTC. Capture then returns
+#   either a placeholder image (virtio) or a pure black frame (std VGA) — the single cause
+#   of this harness's original "boots but never shows a desktop" dead end. Pointer motion
+#   does NOT wake it; a KEY event does. Guests should run:
+#     gsettings set org.gnome.desktop.session idle-delay 0
+#     gsettings set org.gnome.desktop.screensaver lock-enabled false
+#   ...and the harness sends a periodic keepalive key (see vmctl.py keepalive).
+#
 # WHY usb-tablet AND NOT THE DEFAULT MOUSE
 #   The default QEMU mouse is a RELATIVE PS/2 device. Over VNC that makes the guest pointer
 #   drift away from the coordinates the client sent, which would corrupt exactly the
@@ -71,12 +80,23 @@ _qemu() {  # _qemu <name> <vncdisplay> <sshport> [extra...]
   # Overlay so a run never mutates the ISO and a reset is one rm of a file we made.
   [ -f "$disk" ] || qemu-img create -f qcow2 "$disk" "${DISK_GB}G" >/dev/null
 
-  # -vga std, NOT virtio: with virtio-gpu the guest stops driving console 0 once GNOME
-  #   takes over, and QMP `screendump` then returns a framebuffer reading
-  #   "Display output is not active" (observed: splash captured fine, desktop did not,
-  #   query-display-options reported type=none). std VGA keeps a scanout QEMU can dump for
-  #   the whole boot, which is the property this harness depends on.
-  # -device usb-tablet: absolute pointer — see the header note.
+  # -device virtio-vga: the guest needs a real DRM/KMS device for a Wayland session.
+  #
+  # CORRECTION — an earlier comment here blamed virtio-gpu for breaking screendump once
+  # GNOME took over. That was wrong. The real trigger is GNOME's IDLE SCREEN BLANK (~5 min
+  # with no input), which deactivates the CRTC. The guest then sends SET_SCANOUT with
+  # resource_id=0, QEMU swaps in a placeholder surface, and screendump returns an image
+  # whose pixels literally read "Display output is not active." Under -vga std the surface
+  # is never dropped, so the same blank renders as a PURE BLACK frame instead — which is
+  # exactly the "desktop was pure black" symptom that sent this harness down a blind alley.
+  # One event, two renderings. virtio-vga captures a live GNOME desktop fine.
+  #
+  # id=video0 is required for `screendump device=`; without an id you cannot target it.
+  # NEVER pass a `head` you have not confirmed via /backend/console[N] in the QOM tree —
+  # an out-of-range head aborts the whole VM on QEMU 11.0.2.
+  # qemu-xhci + usb-tablet + usb-kbd: what openQA ships. usb-tablet is the ABSOLUTE
+  #   pointer (see the header note). usb-kbd matters for a second reason: pointer motion
+  #   does NOT wake an idle-blanked GNOME — only a key event does.
   # hostfwd 22: so the suite can be driven over ssh once the guest is up, instead of
   #   scripting a GUI installer over VNC.
   qemu-system-x86_64 \
@@ -86,10 +106,10 @@ _qemu() {  # _qemu <name> <vncdisplay> <sshport> [extra...]
     -drive file="$disk",if=virtio,cache=writeback \
     -cdrom "$iso" \
     -boot d \
-    -vga std \
-    -usb -device usb-tablet -device usb-kbd \
+    -device virtio-vga,id=video0,edid=on,xres=1280,yres=800 \
+    -device qemu-xhci,id=xhci -device usb-tablet -device usb-kbd \
     -netdev "user,id=n0,hostfwd=tcp::${ssh}-:22" -device virtio-net-pci,netdev=n0 \
-    -vnc ":${vnc},share=ignore" \
+    -vnc ":${vnc},share=force-shared" \
     -qmp "unix:${STATE}/${name}.qmp,server=on,wait=off" \
     -pidfile "$pidf" \
     -daemonize \

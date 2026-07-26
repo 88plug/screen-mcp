@@ -76,6 +76,7 @@ _OCR_LOCK = threading.Lock()
 # desktop, so this is a politeness fix as much as a speed one. 6 was already the
 # OmniParser default here; OCR simply never got the same cap.
 _CPU_THREADS = int(os.environ.get("MCP_SCREEN_CPU_THREADS", "6"))
+_SPIN_PATCHED = False
 _OMNI_LOCK = threading.Lock()
 
 
@@ -118,6 +119,53 @@ def _quad_to_bbox(quad):
 # ---------------------------------------------------------------------------
 # OCR backend
 # ---------------------------------------------------------------------------
+def _patch_ort_spinning():
+    """Turn OFF onnxruntime's intra-op spin-wait for RapidOCR's sessions.
+
+    The thread cap below was a WORKAROUND, not the fix. ORT's threads busy-spin waiting for
+    work, and that spin — not the arithmetic — is where the CPU went. Measured on one
+    uncached 4K read, whole process tree, identical 118 boxes out of every arm:
+
+        intra_op=-1 (ORT default)     819.9 CPU-s   158.4s wall
+        intra_op=6, spinning ON       256.9 CPU-s   154.5s wall   <- the cap alone
+        intra_op=6, spinning OFF      110.2 CPU-s   102.2s wall   <- this
+        serial floor (intra=1, off)    84.8 CPU-s              (i.e. ~85s is real work)
+
+    So the default burned ~735 CPU-seconds of pure spin. Turning it off is another 2.3x on
+    top of the cap AND faster in wall time.
+
+    There is NO environment variable for this: `ORT_DISABLE_SPINNING` does not exist
+    (verified against the shipped .so), and `OMP_WAIT_POLICY` applies only to the legacy
+    onnxruntime-openmp build. It is only reachable as a session config entry, and RapidOCR
+    builds its own SessionOptions from three keys with no hook for the rest — hence the
+    monkeypatch. Also do NOT use `session.force_spinning_stop`: it only stops spinning
+    after the LAST concurrent Run() returns, and measured no effect here.
+    """
+    global _SPIN_PATCHED
+    if _SPIN_PATCHED:
+        return
+    try:
+        from rapidocr.inference_engine.onnxruntime.main import (  # type: ignore[import-not-found]
+            OrtInferSession,
+        )
+    except Exception:
+        return
+    orig = OrtInferSession._init_sess_opts
+
+    @staticmethod
+    def _patched(cfg):
+        so = orig(cfg)
+        try:
+            so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+            so.add_session_config_entry("session.inter_op.allow_spinning", "0")
+        except Exception:
+            pass
+        return so
+
+    OrtInferSession._init_sess_opts = _patched  # type: ignore[method-assign]
+    _SPIN_PATCHED = True
+
+
 def _build_ocr():
     """The ONLY place RapidOCR is constructed. warmup() previously called RapidOCR() with
     no params and, running first at startup, won the double-checked init — so the thread
@@ -129,10 +177,13 @@ def _build_ocr():
     wall: the threads spin-wait rather than progress, so it was both slower AND starving the
     rest of the desktop. Measured on 24 cores: auto=55.5s wall/610s cpu,
     6 threads=25.9s wall/161s cpu. Fewer threads is faster here."""
+    _patch_ort_spinning()
     return RapidOCR(
         params={
             "EngineConfig.onnxruntime.intra_op_num_threads": _CPU_THREADS,
             "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+            # Screen text is upright; the angle classifier is ~5% of CPU and pure waste here.
+            "Global.use_cls": False,
         }
     )
 

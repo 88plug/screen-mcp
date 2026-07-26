@@ -92,35 +92,6 @@ def _connect(name):
     return Qmp(_sock(name))
 
 
-def shot(name, out):
-    """screendump writes on the QEMU side, so `out` must be an absolute path QEMU can reach.
-    Newer QEMU accepts format=png; fall back to the default PPM when it does not."""
-    out = os.path.abspath(out)
-    q = _connect(name)
-    try:
-        try:
-            q.cmd("screendump", filename=out, format="png")
-        except RuntimeError:
-            q.cmd("screendump", filename=out)
-        # screendump returns before the file is flushed; wait for a non-growing size.
-        last, stable = -1, 0
-        for _ in range(60):
-            time.sleep(0.1)
-            if not os.path.exists(out):
-                continue
-            sz = os.path.getsize(out)
-            if sz and sz == last:
-                stable += 1
-                if stable >= 2:
-                    break
-            else:
-                stable = 0
-            last = sz
-        return os.path.getsize(out) if os.path.exists(out) else 0
-    finally:
-        q.close()
-
-
 def _abs_events(x, y, w, h):
     """QMP abs coordinates are 0..32767 of the display, not pixels."""
     return [
@@ -197,6 +168,77 @@ def type_text(name, text):
         q.close()
 
 
+def keepalive(name):
+    """Send a harmless key so GNOME does not idle-blank.
+
+    Measured: GNOME deactivates the CRTC after ~5 min without input, and capture then
+    returns either a placeholder ("Display output is not active") or a pure black frame
+    depending on the display device. POINTER MOTION DOES NOT WAKE IT — not even a
+    multi-step jiggle. A key event does. `shift` is chosen because it mutates nothing.
+    """
+    key(name, "shift")
+
+
+def shot(name, out, device=None, head=None):
+    """screendump targeting a specific display device.
+
+    `head` is only valid together with `device`, and passing a head beyond the device's
+    console count ABORTS THE WHOLE VM on QEMU 11.0.2 (object_property_find_err on
+    qemu-fixed-text-console). Confirm heads via /backend/console[N] in the QOM tree before
+    ever passing one.
+    """
+    out = os.path.abspath(out)
+    q = _connect(name)
+    try:
+        args = {"filename": out}
+        if device:
+            args["device"] = device
+            if head is not None:
+                args["head"] = int(head)
+        try:
+            q.cmd("screendump", format="png", **args)
+        except RuntimeError:
+            q.cmd("screendump", **args)
+        last, stable = -1, 0
+        for _ in range(60):
+            time.sleep(0.1)
+            if not os.path.exists(out):
+                continue
+            sz = os.path.getsize(out)
+            if sz and sz == last:
+                stable += 1
+                if stable >= 2:
+                    break
+            else:
+                stable = 0
+            last = sz
+        return os.path.getsize(out) if os.path.exists(out) else 0
+    finally:
+        q.close()
+
+
+def consoles(name):
+    """Enumerate /backend/console[N] — the QOM replacement for the `query-consoles` QMP
+    command, which does not exist in QEMU 11.0.2 (verified against query-commands)."""
+    q = _connect(name)
+    out = []
+    try:
+        for entry in q.cmd("qom-list", path="/backend") or []:
+            n = entry.get("name", "")
+            if not n.startswith("console["):
+                continue
+            row: dict[str, object] = {"path": f"/backend/{n}"}
+            for prop in ("device", "head"):
+                try:
+                    row[prop] = q.cmd("qom-get", path=row["path"], property=prop)
+                except Exception:
+                    row[prop] = None
+            out.append(row)
+    finally:
+        q.close()
+    return out
+
+
 def display_size_via(q):
     """Guest display size in pixels, from the first active console."""
     for dev in q.cmd("query-display-options") or []:
@@ -223,7 +265,9 @@ def info(name):
         return {
             "status": st.get("status"),
             "running": st.get("running"),
-            "vnc": {k: vnc.get(k) for k in ("enabled", "host", "service")} if vnc else {},
+            "vnc": {k: vnc.get(k) for k in ("enabled", "host", "service")}
+            if vnc
+            else {},
         }
     finally:
         q.close()
@@ -251,6 +295,12 @@ def main(argv):
         return 0
     if op == "type":
         type_text(argv[2], argv[3])
+        return 0
+    if op == "keepalive":
+        keepalive(argv[2])
+        return 0
+    if op == "consoles":
+        print(" ", json.dumps(consoles(argv[2])))
         return 0
     if op == "info":
         print("  ", json.dumps(info(argv[2])))

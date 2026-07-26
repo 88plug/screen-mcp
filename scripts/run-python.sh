@@ -40,22 +40,75 @@ _gi_ok() {
     "$1" -c 'import importlib.util as u,sys; sys.exit(0 if u.find_spec("gi") else 1)' >/dev/null 2>&1
 }
 
-_try() {
-  local cand="$1"
-  [ -n "$cand" ] || return 1
-  if [ -x "$cand" ] && _version_ok "$cand" && _gi_ok "$cand"; then
-    printf '%s' "$cand"
+# ONE probe per interpreter, answering every question at once, cached.
+#
+# find_spec (not import) because importing onnxruntime + cv2 costs ~3s of pure startup.
+# But the probes themselves were the next bottleneck: version, gi and two dep checks were
+# four separate `python -c` spawns, and the launcher was making SIX in total at ~0.3s each
+# — ~2s on every single server start. One spawn answers all of it.
+#
+# Prints three space-separated flags: <gi> <hard> <full>, each 1 or 0.
+_PROBE_SRC='
+import importlib.util as u, sys
+if sys.version_info < (3, 10):
+    sys.exit(3)
+spec = u.find_spec
+gi = 1 if spec("gi") else 0
+hard = 1 if all(spec(m) for m in ("numpy", "PIL")) else 0
+full = 1 if hard and all(spec(m) for m in ("cv2", "onnxruntime", "rapidocr")) else 0
+print(gi, hard, full)
+'
+_PROBE_CACHE_PY=""
+_PROBE_CACHE_OUT=""
+
+_probe() {  # _probe <python> -> echoes "<gi> <hard> <full>"; empty when unusable
+  [ -n "$1" ] || { printf ''; return 1; }
+  if [ "$1" = "$_PROBE_CACHE_PY" ]; then
+    printf '%s' "$_PROBE_CACHE_OUT"
+    [ -n "$_PROBE_CACHE_OUT" ] || return 1
     return 0
   fi
-  if command -v "$cand" >/dev/null 2>&1; then
-    local resolved
+  local out
+  out="$("$1" -c "$_PROBE_SRC" 2>/dev/null)" || out=""
+  _PROBE_CACHE_PY="$1"
+  _PROBE_CACHE_OUT="$out"
+  printf '%s' "$out"
+  [ -n "$out" ] || return 1
+}
+
+_flag() {  # _flag <python> <1|2|3>  (gi|hard|full)
+  local out; out="$(_probe "$1")" || return 1
+  [ "$(printf '%s' "$out" | cut -d" " -f"$2")" = "1" ]
+}
+
+_have_hard_deps() { _flag "$1" 2; }
+_have_full_deps() { _flag "$1" 3; }
+
+_try() {
+  # ONE probe per candidate. This used to spawn _version_ok AND _gi_ok separately for
+  # every candidate in a 5-tier search — the launcher was making six `python -c` calls at
+  # ~0.3s each before it even exec'd. _probe answers version+gi+deps in a single spawn and
+  # caches, so a resolved candidate costs one interpreter start.
+  local cand="$1" resolved=""
+  [ -n "$cand" ] || return 1
+  if [ -x "$cand" ]; then
+    resolved="$cand"
+  elif command -v "$cand" >/dev/null 2>&1; then
     resolved="$(command -v "$cand")"
-    if _version_ok "$resolved" && _gi_ok "$resolved"; then
-      printf '%s' "$resolved"
-      return 0
-    fi
+  else
+    return 1
   fi
-  return 1
+  # Capture the probe ONCE and read the flag out of that string. Calling _flag here would
+  # re-run _probe in a fresh command substitution — a subshell, where the cache set by the
+  # first call is invisible — so every candidate cost two interpreter spawns instead of one.
+  local out
+  out="$("$resolved" -c "$_PROBE_SRC" 2>/dev/null)" || return 1
+  [ -n "$out" ] || return 1                   # empty also covers version < 3.10 (exit 3)
+  if [ "$REQUIRE_GI" = "1" ] && [ "${out%% *}" != "1" ]; then
+    return 1
+  fi
+  printf '%s' "$resolved"
+  return 0
 }
 
 find_python() {
@@ -129,15 +182,6 @@ fi
 # Opt out: MCP_SCREEN_NO_AUTO_DEPS=1. Heavy optional set: MCP_SCREEN_AUTO_DEPS=full.
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# find_spec, not import: this runs on EVERY server start, and actually importing
-# onnxruntime + cv2 costs ~3s of pure startup latency. Locating the modules answers the
-# only question we have here — are they installed — without executing them.
-_have_hard_deps() {
-  "$1" -c 'import importlib.util as u,sys; sys.exit(0 if all(u.find_spec(m) for m in ("numpy","PIL")) else 1)' >/dev/null 2>&1
-}
-_have_full_deps() {
-  "$1" -c 'import importlib.util as u,sys; sys.exit(0 if all(u.find_spec(m) for m in ("numpy","PIL","cv2","onnxruntime","rapidocr")) else 1)' >/dev/null 2>&1
-}
 
 # The system layer (PyGObject + GStreamer typelibs + PipeWire) is the ONE part that cannot
 # ship with us. Measured 2026-07-25: PyGObject has no wheel — pip builds it from source and
@@ -169,6 +213,33 @@ _system_layer_hint() {
 # `.venv/bin/python -m pip` run a binary that does not exist and the launcher died 127 with
 # no diagnostic, permanently (every relaunch re-entered the same branch).
 set +e
+# --- uv fast path -----------------------------------------------------------------------
+# `uv venv --system-site-packages` + `uv sync` replaces the interpreter hunting, the
+# --target fallback, the pip cross-install and the headless-cv2 repair below. It is the
+# only uv mode that INHERITS system site-packages, which is mandatory: PyGObject ships
+# sdist-only (0 wheels, every version through 3.56.3) because it binds host typelibs, so
+# `gi` exists only where the distro installed it. uv run --script / uvx / pipx all build
+# ISOLATED envs and therefore cannot see gi at all.
+#
+# Measured: cold full install (~335MB incl. onnxruntime) 7.1s, warm 0.05s — comfortably
+# inside Claude Code's 30s MCP_TIMEOUT, which is why the old background `nohup pip` is gone.
+if [ "${MCP_SCREEN_NO_AUTO_DEPS:-0}" != "1" ] && [ "${MCP_SCREEN_NO_UV:-0}" != "1" ] \
+   && command -v uv >/dev/null 2>&1 && [ -f "${ROOT}/pyproject.toml" ]; then
+  # _have_full_deps, not _satisfied: the latter is defined further down inside the MODE
+  # branch, so calling it here silently failed ("command not found" under a non-fatal
+  # context) and the uv sync ran on EVERY launch — provisioning a host that needed nothing.
+  if ! _have_full_deps "$PY"; then
+    echo "screen-mcp: syncing deps with uv ..." >&2
+    UV_LINK_MODE=copy uv venv --system-site-packages --python "$PY" "${ROOT}/.venv" >&2 2>/dev/null
+    UV_LINK_MODE=copy uv sync --active --project "$ROOT" --extra uinput >&2 2>/dev/null \
+      || UV_LINK_MODE=copy uv sync --active --project "$ROOT" >&2 2>/dev/null || true
+  fi
+  if _have_hard_deps "${ROOT}/.venv/bin/python" 2>/dev/null \
+     && { [ "$REQUIRE_GI" != "1" ] || "${ROOT}/.venv/bin/python" -c 'import gi' >/dev/null 2>&1; }; then
+    exec "${ROOT}/.venv/bin/python" "$@"
+  fi
+fi
+
 if [ "${MCP_SCREEN_NO_AUTO_DEPS:-0}" != "1" ]; then
   VENV="${ROOT}/.venv"
   MODE="${MCP_SCREEN_AUTO_DEPS:-full}"
@@ -214,41 +285,6 @@ if [ "${MCP_SCREEN_NO_AUTO_DEPS:-0}" != "1" ]; then
     "$helper" -m pip --python "$PY" install --quiet --target "$DEPS" -r "$req" >&2
   }
 
-  # rapidocr depends on opencv-python (NOT the headless build), which drags in libGL and
-  # makes `import cv2` fail with "libGL.so.1: cannot open shared object file" on any
-  # headless/server box. Both distributions install the same `cv2` package, so reinstalling
-  # headless LAST overwrites the GL-linked binary with the headless one. Measured: this is
-  # the difference between cv2 importing and not in a clean container.
-  _force_headless_cv2() {
-    local helper target_flag="$1"
-    "$PY" -c 'import cv2' >/dev/null 2>&1 && return 0
-    helper="$(_pip_helper)" || return 1
-    if [ "$target_flag" = "target" ]; then
-      "$helper" -m pip --python "$PY" install --quiet --upgrade --force-reinstall \
-        --no-deps --target "$DEPS" opencv-python-headless >/dev/null 2>&1
-    else
-      "${VENV}/bin/python" -m pip install --quiet --upgrade --force-reinstall \
-        --no-deps opencv-python-headless >/dev/null 2>&1
-    fi
-  }
-  _use_target_if_ready() {
-    [ -d "$DEPS" ] || return 1
-    PYTHONPATH="${DEPS}${PYTHONPATH:+:$PYTHONPATH}" "$PY" -c 'import numpy, PIL' >/dev/null 2>&1
-  }
-
-  # Install the HARD deps synchronously (small, and the server cannot import without
-  # them), then finish the heavy optional set in the BACKGROUND. onnxruntime alone is
-  # ~200MB; doing it inline on first launch ran past the MCP client's server-startup
-  # timeout, so the client gave up before `initialize` could be answered. Grounding lights
-  # up a little after startup instead of blocking it.
-  if [ "$MODE" != "core" ] && ! _have_hard_deps "$PY" && [ ! -f "$STAMP" ]; then
-    REQ_SYNC="${ROOT}/requirements-core.txt"
-    REQ_BG="$REQ"
-  else
-    REQ_SYNC="$REQ"
-    REQ_BG=""
-  fi
-
   if ! _satisfied "$PY" && [ ! -f "$STAMP" ] && [ -f "$REQ" ]; then
     echo "screen-mcp: provisioning Python deps ..." >&2
     # --system-site-packages is LOAD-BEARING: gi/GStreamer are system packages a plain
@@ -287,17 +323,11 @@ if [ "${MCP_SCREEN_NO_AUTO_DEPS:-0}" != "1" ]; then
       if _use_target_if_ready; then
         : > "$STAMP"
         export PYTHONPATH="${DEPS}${PYTHONPATH:+:$PYTHONPATH}"
-        _force_headless_cv2 target
         echo "screen-mcp: provisioned ok (--target)." >&2
       fi
     elif true; then
       "${VENV}/bin/python" -m pip install --quiet --upgrade pip >&2 2>/dev/null
       if "${VENV}/bin/python" -m pip install --quiet -r "$REQ_SYNC" >&2; then
-        if [ -n "$REQ_BG" ]; then
-          echo "screen-mcp: installing grounding backends in the background ..." >&2
-          nohup "${VENV}/bin/python" -m pip install --quiet -r "$REQ_BG" \
-            >/dev/null 2>&1 &
-        fi
         : > "$STAMP"
         # evdev separately and best-effort: it builds against kernel headers and its
         # failure must never sink the grounding stack (it did — measured). Prefer the
@@ -307,7 +337,6 @@ if [ "${MCP_SCREEN_NO_AUTO_DEPS:-0}" != "1" ]; then
             || "${VENV}/bin/python" -m pip install --quiet evdev >/dev/null 2>&1 \
             || echo "screen-mcp: evdev unavailable (uinput backend off; portal input still works)." >&2
         fi
-        _force_headless_cv2 venv
         echo "screen-mcp: provisioned ok." >&2
       elif "${VENV}/bin/python" -m pip install --quiet -r "${ROOT}/requirements-core.txt" >&2; then
         # Degrade rather than die: core gets a working server without grounding.
