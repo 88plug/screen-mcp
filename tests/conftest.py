@@ -50,6 +50,10 @@ def _install_gi_stub():
 
     class _GLib:
         @staticmethod
+        def quark_from_string(_s):  # capture.py builds _CURSOR_QUARK at import
+            return 1
+
+        @staticmethod
         def usleep(_):
             return None
 
@@ -71,8 +75,42 @@ def _install_gi_stub():
                 call_sync=lambda *_a, **_kw: None,
             )
 
+    class _Gst:
+        """Enough Gst for capture.py to IMPORT. Not enough to capture anything — the tests
+        that reach a pipeline are still REAL_STACK-gated. The point is that capture's pure
+        logic (validate_scope, the region/monitor translation, encode_store wiring) becomes
+        reachable in CI instead of hiding behind a wholesale `capture` stub."""
+
+        SECOND = 1_000_000_000
+
+        class State:
+            NULL = 0
+            PLAYING = 4
+
+        class PadProbeType:
+            BUFFER = 1
+
+        @staticmethod
+        def init(_argv=None):
+            return None
+
+        @staticmethod
+        def is_initialized():
+            return True
+
+        @staticmethod
+        def parse_launch(*_a, **_kw):
+            raise RuntimeError("stubbed Gst: no pipelines headless")
+
+        class ElementFactory:
+            @staticmethod
+            def find(_name):
+                return None
+
     repo.GLib = _GLib
     repo.Gio = _Gio
+    repo.Gst = _Gst
+    repo.GstApp = types.ModuleType("GstApp")
     sys.modules["gi"] = gi
     sys.modules["gi.repository"] = repo
 
@@ -89,9 +127,19 @@ def _install_state_stub():
 
 
 def _install_capture_stub():
-    """input.guard_user does a lazy `import capture`; stub it so importing input is enough."""
+    """input.guard_user does a lazy `import capture`; stub it so importing input is enough.
+
+    REAL-FIRST here too: try the genuine capture module against the gi stub above. It
+    imports fine (its module-level work is just Gst.init + a quark), which puts its pure
+    logic under test in CI. Only fall back to the 2-function stub if that fails."""
     if REAL_STACK or "capture" in sys.modules:
         return
+    try:
+        import capture  # noqa: F401
+
+        return
+    except Exception:
+        pass
     cap = cast(Any, types.ModuleType("capture"))
     cap.cursor_pos = lambda *_a, **_kw: None
     cap.cursor_sample_age = lambda *_a, **_kw: None

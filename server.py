@@ -1236,8 +1236,17 @@ def tool_tour(args):
     default_settle = float(args.get("settle", 400))
     force = args.get("force")
     max_edge = int(args.get("shot_max_edge", 1280))
+    # The client cap applies to the WHOLE tool result, but this handler emits one image per
+    # stop. Fitting each to the full cap ships N x cap and the client truncates everything.
+    # Split it evenly, and once the budget is spent keep returning each stop's TEXT with an
+    # explicit note instead of silently emitting images that will be truncated away.
+    _per_image_cap = (
+        max(4, budget.MAX_OUT_KB // max(1, len(stops))) if budget.MAX_OUT_KB else None
+    )
+    _img_budget_left = budget.MAX_OUT_KB if budget.MAX_OUT_KB else None
     capture.ensure_geo()  # self-initialize so the first step's click has geo (no warm-up shot needed)
     content, errs, t_all = [], [], time.time()
+    _shots_emitted = 0
     for si, stop in enumerate(stops):
         label = stop.get("label", f"stop{si}")
         for step in (dict(s) for s in stop.get("steps", [])):
@@ -1293,7 +1302,31 @@ def tool_tour(args):
             img = capture.draw_cursor(img, ox, oy)
         except Exception:
             pass
-        content += capture.encode_store(img, ox, oy, label, t0, max_edge=max_edge)
+        # The client cap applies to the WHOLE tool result, but this handler emits one
+        # image per stop. Fitting each to the full cap ships N x cap and the client
+        # truncates the lot. Divide it, with a floor so a long tour still returns
+        # something legible rather than N unreadable specks.
+        if _img_budget_left is not None and _img_budget_left < 4:
+            content.append(
+                {
+                    "type": "text",
+                    "text": (
+                        f"{label}: image omitted — this client's "
+                        f"{budget.MAX_OUT_KB}KB result cap is spent after "
+                        f"{_shots_emitted} thumbnails. Re-run screen_tour with fewer "
+                        f"stops, or screen_screenshot that stop alone, for pixels."
+                    ),
+                }
+            )
+        else:
+            _blocks = capture.encode_store(
+                img, ox, oy, label, t0, max_edge=max_edge, max_out_kb=_per_image_cap
+            )
+            content += _blocks
+            _shots_emitted += 1
+            if _img_budget_left is not None:
+                _spent = sum(len(b.get("data", "")) for b in _blocks) // 1024
+                _img_budget_left -= max(1, _spent)
         if REC.active():
             REC.log_frame(img, f"tour:{label}", state.SESSION.get("view"))
     head = (

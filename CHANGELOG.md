@@ -4,6 +4,16 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
 
 ## Unreleased
 
+- **The client cap now applies to the whole tool RESULT, not each image.** `screen_tour`
+  emits one thumbnail per stop in a single result; fitting each to the full cap shipped
+  N x cap and the client truncated the lot. The cap is split across stops, and once the
+  budget is spent each remaining stop returns its TEXT plus an explicit note rather than
+  images that would be silently truncated away.
+- **CI now runs the capture-side tests instead of skipping them.** conftest stubs `gi`
+  (adding `Gst`/`GstApp`/`GLib.quark_from_string`) and then imports the REAL `capture`
+  against it, rather than substituting a 2-function fake module. Region/monitor translation
+  and client-cap detection are executed headless; only tests that need a live pipeline stay
+  behind `REAL_STACK`. Headless went 163 -> 177 passed, skips 28 -> 15.
 - **The OCR thread cap was INERT in the live server.** `warmup()` constructed `RapidOCR()`
   with no params and, running first at startup, won the double-checked `_OCR` init — so the
   cap only ever applied in benchmarks that happened to call `ocr_boxes` first. There is now

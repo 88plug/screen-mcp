@@ -8,15 +8,10 @@ default (Claude, uncapped) path stays a byte-for-byte no-op.
 
 import pytest
 
-import conftest
 
-# These exercise the REAL capture/server modules (MAX_OUT_KB, _b64_len, _fit_to_budget,
-# capture_desktop). Without gi/GStreamer/a session bus, conftest swaps in a stub `capture`
-# that has none of those attributes, so the module must gate exactly like
-# test_capture_real.py does — otherwise CI reports AttributeError instead of skipping.
-pytestmark = pytest.mark.skipif(
-    not conftest.REAL_STACK, reason="needs real gi/GStreamer + session bus"
-)
+# conftest now imports the REAL capture against a stubbed gi, so these run everywhere.
+# They exercise pure logic only (client-cap detection, the region/monitor translation) —
+# anything that needs a live pipeline stays in test_capture_real.py behind REAL_STACK.
 
 import budget  # noqa: E402
 import server  # noqa: E402

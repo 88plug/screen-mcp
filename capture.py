@@ -1282,7 +1282,7 @@ def _downscale(img, w, h):
     return Image.fromarray(out, img.mode)
 
 
-def encode_store(img, ox, oy, label, t0, max_edge=None):
+def encode_store(img, ox, oy, label, t0, max_edge=None, max_out_kb=None):
     """Downscale to <=max_edge (default state.MAX_EDGE) long edge, remember the view->desktop
     transform, encode WebP. Pass a smaller max_edge for tour thumbnails (fewer tokens). For
     lossy thumbnails (max_edge < MAX_EDGE) we use WebP q=80 to shrink payload further.
@@ -1328,7 +1328,7 @@ def encode_store(img, ox, oy, label, t0, max_edge=None):
         # envelope — under-reserving pushes the whole tool result back over the client cap.
         _reserve = 2048 + len(_stale_note(ox, oy, dw, dh).encode()) + 512
         raw, budget_note, (fw, fh) = budget.fit_to_budget(
-            out, raw, _downscale, reserve_bytes=_reserve
+            out, raw, _downscale, max_out_kb=max_out_kb, reserve_bytes=_reserve
         )
     # A fitted image is SMALLER than `out`, so the view transform stamped above no longer
     # describes what the client receives. Restate it against the shipped pixels: advertising

@@ -241,3 +241,16 @@ def test_malformed_env_does_not_crash_at_import(monkeypatch):
         assert isinstance(budget._env_int("MCP_SCREEN_MAX_OUTPUT_KB", 0), int)
     monkeypatch.setenv("MCP_SCREEN_MAX_OUTPUT_KB", "-5")
     assert budget._env_int("MCP_SCREEN_MAX_OUTPUT_KB", 0) >= 0
+
+
+def test_per_call_cap_override_beats_module_state(restore_cap):
+    """Multi-image handlers (screen_tour) must be able to divide the result-wide cap across
+    the images they emit. Fitting each image to the FULL cap ships N x cap and the client
+    truncates the whole result."""
+    budget.MAX_OUT_KB = 20
+    img = _shot()
+    raw = _lossless(img)
+    whole, _, _ = budget.fit_to_budget(img, raw, _downscale)
+    split, _, _ = budget.fit_to_budget(img, raw, _downscale, max_out_kb=5)
+    assert budget.b64_len(len(split)) <= 5 * 1024
+    assert budget.b64_len(len(split)) < budget.b64_len(len(whole))
