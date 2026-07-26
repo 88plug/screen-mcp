@@ -8,5 +8,5 @@
 # The launcher installs these into a `--system-site-packages` venv — that flag is
 # load-bearing, since PyGObject `gi` / GStreamer / PipeWire are system packages a
 # plain venv would hide.
-numpy>=1.26
+numpy>=2.2.6
 Pillow>=10.0
