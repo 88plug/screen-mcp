@@ -8,7 +8,9 @@ Pillow>=10.0
 # OPTIONAL — grounding (annotate=true / Set-of-Marks). Each backend is imported in
 # its own try/except; the server runs without them but annotate=true returns the
 # image unchanged with an empty element list.
-rapidocr-onnxruntime>=1.4   # text OCR backend (RapidOCR v3)
+rapidocr>=3.0               # text OCR backend. The code does `from rapidocr import RapidOCR`,
+                            # which rapidocr-onnxruntime does NOT provide (it ships
+                            # `rapidocr_onnxruntime`) — installing that one yields NO OCR.
 onnxruntime>=1.18           # OmniParser icon_detect (CPU-only, YOLOv8 ONNX)
 opencv-python-headless>=4.8 # letterbox/NMS for OmniParser, classical CV fallback, and the INTER_AREA screenshot downscale (15x faster than PIL LANCZOS)
 

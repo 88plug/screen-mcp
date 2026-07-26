@@ -4,6 +4,17 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
 
 ## Unreleased
 
+- **`requirements.txt` named an OCR package the code cannot import.** It listed
+  `rapidocr-onnxruntime>=1.4` labelled "(RapidOCR v3)", but `grounding.py` does
+  `from rapidocr import RapidOCR` and that distribution ships `rapidocr_onnxruntime`
+  instead — verified in a clean container: `ModuleNotFoundError: No module named
+  'rapidocr'`. Anyone installing from requirements.txt therefore got a server with OCR
+  silently disabled (the import is try/except-guarded, so it degraded quietly). Now
+  `rapidocr>=3.0`, matching the import and requirements-runtime.txt.
+- **CI moved 3.12 -> 3.13.** The pin existed solely because `rapidocr-onnxruntime`
+  declares `requires_python <3.13`; the package we actually use, `rapidocr` v3, declares
+  `<4,>=3.8`. Verified on PyPI and by installing the CI dep set plus rapidocr on 3.13 in a
+  container. Stale references removed from README and docs/install.md too.
 - **Output-budget fitting moved to `budget.py` so CI actually executes it.** The logic sat
   in `capture.py`, which cannot be imported without a real gi/GStreamer/D-Bus session — a
   headless run substitutes a stub `capture`, so the tests raised `AttributeError` and CI was

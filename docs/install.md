@@ -10,7 +10,7 @@ screen-mcp targets a specific stack. It will not run on macOS, Windows, X11-only
 | Layer | Need |
 |---|---|
 | OS / session | Linux, Wayland, GNOME Shell |
-| Python | 3.10+ runtime (tested on 3.14). CI pins 3.12: optional `rapidocr-onnxruntime` lacks py3.13 wheels |
+| Python | 3.10+ runtime (tested on 3.14); CI runs 3.13 |
 | Capture | GStreamer ≥ 1.28 (`leaky-type`; older `drop=` removed in 1.28), PipeWire, portal ScreenCast |
 | Input | portal RemoteDesktop; optional `/dev/uinput` + `evdev` for the kernel backend |
 | Clipboard | `wl-clipboard` for Unicode paste in `screen_type` |

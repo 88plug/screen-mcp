@@ -141,7 +141,7 @@ annotated shot.
 - Linux + Wayland + GNOME. The awareness layer uses a bundled GNOME Shell
   extension; AT-SPI is the fallback for GTK apps.
 - Python 3.10+ runtime (tested on 3.14). CI pins **3.12** because optional
-  `rapidocr-onnxruntime` has no py3.13 wheels yet (`requires_python <3.13`).
+  the OCR backend is `rapidocr` (v3), which supports 3.8-3.x.
 - GStreamer >= 1.28 (uses `leaky-type`; the older `drop=` was removed in 1.28).
 - PipeWire and `xdg-desktop-portal-gnome`.
 - `wl-clipboard` for the Unicode paste path in `screen_type`.
