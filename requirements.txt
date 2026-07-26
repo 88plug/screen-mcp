@@ -11,7 +11,7 @@ Pillow>=10.0
 rapidocr>=3.9.2               # text OCR backend. The code does `from rapidocr import RapidOCR`,
                             # which rapidocr-onnxruntime does NOT provide (it ships
                             # `rapidocr_onnxruntime`) — installing that one yields NO OCR.
-onnxruntime>=1.18           # OmniParser icon_detect (CPU-only, YOLOv8 ONNX)
+onnxruntime>=1.24.3           # OmniParser icon_detect (CPU-only, YOLOv8 ONNX)
 opencv-python-headless>=4.8 # letterbox/NMS for OmniParser, classical CV fallback, and the INTER_AREA screenshot downscale (15x faster than PIL LANCZOS)
 
 # DEV — test runner. The conftest stubs heavy modules so tests run without a live
