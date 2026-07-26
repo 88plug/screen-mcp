@@ -11,8 +11,18 @@ import io
 import pytest
 from PIL import Image
 
-import capture
-import server
+import conftest
+
+# These exercise the REAL capture/server modules (MAX_OUT_KB, _b64_len, _fit_to_budget,
+# capture_desktop). Without gi/GStreamer/a session bus, conftest swaps in a stub `capture`
+# that has none of those attributes, so the module must gate exactly like
+# test_capture_real.py does — otherwise CI reports AttributeError instead of skipping.
+pytestmark = pytest.mark.skipif(
+    not conftest.REAL_STACK, reason="needs real gi/GStreamer + session bus"
+)
+
+import capture  # noqa: E402
+import server  # noqa: E402
 
 
 @pytest.fixture
