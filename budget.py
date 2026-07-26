@@ -22,7 +22,10 @@ import os
 #: source of truth rather than two drifting copies.
 MAX_OUT_KB = int(os.environ.get("MCP_SCREEN_MAX_OUTPUT_KB", "0"))
 
-#: Headroom left for the accompanying text block + JSON envelope.
+#: Default headroom for the accompanying text block + JSON envelope. Callers that know how
+#: much text they will emit alongside the image should pass `reserve_bytes` instead — an
+#: annotated screenshot can carry one line per detected element, which on a busy 4K desktop
+#: far exceeds this default and would push the whole result back over the client's cap.
 ENVELOPE_BYTES = 2048
 
 _START_QUALITY = 60
@@ -33,8 +36,13 @@ def b64_len(n):
     return ((n + 2) // 3) * 4
 
 
-def fit_to_budget(out, raw, downscale, max_out_kb=None):
-    """Shrink `out` until its base64 fits the cap. Returns (raw_bytes, note).
+def fit_to_budget(out, raw, downscale, max_out_kb=None, reserve_bytes=None):
+    """Shrink `out` until its base64 fits the cap. Returns (raw_bytes, note, (w, h)).
+
+    The returned (w, h) is the size of the image ACTUALLY encoded, and callers MUST use it
+    to restate their view->desktop transform. Shipping a shrunk image while advertising the
+    pre-shrink scale makes every view-space click miss by that ratio — the stale-view guard
+    cannot catch it, because the view id never changed.
 
     `downscale(img, w, h) -> img` is injected (capture passes its cv2/PIL implementation).
     Returns `raw` unchanged, and an empty note, when no cap applies or it already fits —
@@ -47,10 +55,11 @@ def fit_to_budget(out, raw, downscale, max_out_kb=None):
     """
     cap = MAX_OUT_KB if max_out_kb is None else max_out_kb
     if not cap:
-        return raw, ""
-    budget = cap * 1024 - ENVELOPE_BYTES
+        return raw, "", out.size
+    reserve = ENVELOPE_BYTES if reserve_bytes is None else max(reserve_bytes, 512)
+    budget = cap * 1024 - reserve
     if budget <= 0 or b64_len(len(raw)) <= budget:
-        return raw, ""
+        return raw, "", out.size
 
     w0, h0 = out.size
     q = _START_QUALITY
@@ -74,9 +83,14 @@ def fit_to_budget(out, raw, downscale, max_out_kb=None):
     for i in range(12):
         got = b64_len(len(cand))
         if got <= budget:
-            return cand, (
-                f" [shrunk to {len(cand) // 1024}KB ({w}x{h}, q{q}) to fit this client's "
-                f"{cap}KB tool-output cap — use region=[x,y,w,h] for a crisp zoom]"
+            return (
+                cand,
+                (
+                    f" [shrunk to {len(cand) // 1024}KB ({w}x{h}, q{q}) to fit this "
+                    f"client's {cap}KB tool-output cap — use region=[x,y,w,h] for a "
+                    f"crisp zoom]"
+                ),
+                (w, h),
             )
         if min(w, h) <= 8:
             break
@@ -85,7 +99,11 @@ def fit_to_budget(out, raw, downscale, max_out_kb=None):
         w0, h0 = w, h
 
     # Floor reached and still over: send it anyway and say so, rather than silently lying.
-    return cand, (
-        f" [WARNING: {b64_len(len(cand)) // 1024}KB still exceeds the {cap}KB cap; "
-        f"the client may drop this image — use region=[x,y,w,h] to capture less]"
+    return (
+        cand,
+        (
+            f" [WARNING: {b64_len(len(cand)) // 1024}KB still exceeds the {cap}KB cap; "
+            f"the client may drop this image — use region=[x,y,w,h] to capture less]"
+        ),
+        (w, h),
     )

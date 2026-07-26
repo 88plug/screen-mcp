@@ -1317,10 +1317,24 @@ def encode_store(img, ox, oy, label, t0, max_edge=None):
     _enc.__exit__(None, None, None)
     raw = buf.getvalue()
     with state.stage("fit"):
-        raw, budget_note = budget.fit_to_budget(out, raw, _downscale)
+        # Reserve the text we actually emit alongside the image. The header alone is ~300B,
+        # but a stale-note or an annotate element list can be far larger than the default
+        # envelope — under-reserving pushes the whole tool result back over the client cap.
+        _reserve = 2048 + len(_stale_note(ox, oy, dw, dh).encode()) + 512
+        raw, budget_note, (fw, fh) = budget.fit_to_budget(
+            out, raw, _downscale, reserve_bytes=_reserve
+        )
+    # A fitted image is SMALLER than `out`, so the view transform stamped above no longer
+    # describes what the client receives. Restate it against the shipped pixels: advertising
+    # the pre-shrink scale makes every view-space click miss by that ratio, and view_id
+    # cannot catch it because the id never changed. Verified: a 2576x1449/scale-0.6708 shot
+    # shipped as 526x296 under a 20KB cap — clicks landed ~4.9x short.
+    if (fw, fh) != out.size:
+        scale = (fw / dw) if dw else scale
+        state.SESSION["view"]["scale"] = scale
     ms = int((time.time() - t0) * 1000)
     txt = (
-        f"{label}: view#{vid} {out.width}x{out.height} (scale {scale:.4f}) covering desktop "
+        f"{label}: view#{vid} {fw}x{fh} (scale {scale:.4f}) covering desktop "
         f"origin=({ox},{oy}) size={dw}x{dh}. {len(raw) // 1024}KB, {ms}ms. "
         f"Click with space='view' using coords as seen here (pass view_id={vid} to bind "
         f"the click to THIS screenshot)."

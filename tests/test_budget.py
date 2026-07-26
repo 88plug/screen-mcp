@@ -53,7 +53,7 @@ def test_uncapped_is_byte_identical_noop(restore_cap):
     budget.MAX_OUT_KB = 0
     img = _shot()
     raw = _lossless(img)
-    out, note = budget.fit_to_budget(img, raw, _downscale)
+    out, note, _size = budget.fit_to_budget(img, raw, _downscale)
     assert out is raw, "uncapped must return the SAME object, not a re-encode"
     assert note == ""
 
@@ -63,7 +63,7 @@ def test_payload_already_under_cap_is_untouched(restore_cap):
     img = _shot(400, 200)
     raw = _lossless(img)
     assert budget.b64_len(len(raw)) <= 20 * 1024 - budget.ENVELOPE_BYTES
-    out, note = budget.fit_to_budget(img, raw, _downscale)
+    out, note, _size = budget.fit_to_budget(img, raw, _downscale)
     assert out is raw and note == ""
 
 
@@ -71,7 +71,7 @@ def test_explicit_cap_argument_overrides_module_state(restore_cap):
     budget.MAX_OUT_KB = 0
     img = _shot()
     raw = _lossless(img)
-    out, note = budget.fit_to_budget(img, raw, _downscale, max_out_kb=20)
+    out, note, _size = budget.fit_to_budget(img, raw, _downscale, max_out_kb=20)
     assert out is not raw and "shrunk" in note
 
 
@@ -84,7 +84,7 @@ def test_oversized_payload_is_fitted_and_still_decodes(restore_cap):
     raw = _lossless(img)
     assert budget.b64_len(len(raw)) > 20 * 1024, "fixture must exceed the cap"
 
-    out, note = budget.fit_to_budget(img, raw, _downscale)
+    out, note, _size = budget.fit_to_budget(img, raw, _downscale)
 
     assert budget.b64_len(len(out)) <= 20 * 1024 - budget.ENVELOPE_BYTES
     assert "shrunk" in note and "region=" in note, (
@@ -100,7 +100,7 @@ def test_fit_is_guaranteed_even_for_incompressible_input(restore_cap):
     exactly the over-budget payload this function exists to prevent."""
     budget.MAX_OUT_KB = 20
     img = Image.effect_noise((2576, 1449), 90).convert("RGB")
-    out, _ = budget.fit_to_budget(img, _lossless(img), _downscale)
+    out, _, _size = budget.fit_to_budget(img, _lossless(img), _downscale)
     assert budget.b64_len(len(out)) <= 20 * 1024 - budget.ENVELOPE_BYTES
     Image.open(io.BytesIO(out)).load()
 
@@ -110,7 +110,7 @@ def test_fitted_payload_uses_the_budget_rather_than_collapsing(restore_cap):
     image. The analytic estimate should land near the cap, not far under it."""
     budget.MAX_OUT_KB = 20
     img = _shot()
-    out, _ = budget.fit_to_budget(img, _lossless(img), _downscale)
+    out, _, _size = budget.fit_to_budget(img, _lossless(img), _downscale)
     usable = 20 * 1024 - budget.ENVELOPE_BYTES
     assert budget.b64_len(len(out)) > usable * 0.4
 
@@ -119,7 +119,7 @@ def test_tiny_cap_degrades_instead_of_raising(restore_cap):
     """A cap smaller than the envelope reserve must not crash or loop forever."""
     budget.MAX_OUT_KB = 1
     img = _shot()
-    out, note = budget.fit_to_budget(img, _lossless(img), _downscale)
+    out, note, _size = budget.fit_to_budget(img, _lossless(img), _downscale)
     assert isinstance(out, bytes) and out
     assert note == "" or "WARNING" in note or "shrunk" in note
 
@@ -156,3 +156,47 @@ def test_budget_module_imports_without_gi():
     for banned in ("import gi", "import state", "import capture", "gi.repository"):
         assert banned not in src, f"budget.py must not reference {banned!r}"
     assert sys.modules.get("budget") is budget
+
+
+# --- regressions from the max code review ---------------------------------------------
+
+
+def test_fit_reports_the_size_actually_encoded(restore_cap):
+    """The caller restates its view->desktop transform from this size. Returning the
+    pre-shrink size shipped a 526x296 image while advertising 2576x1449 / scale 0.6708,
+    so every view-space click missed by ~4.9x and view_id could not detect it."""
+    budget.MAX_OUT_KB = 20
+    img = _shot()
+    out, _, size = budget.fit_to_budget(img, _lossless(img), _downscale)
+    assert size == Image.open(io.BytesIO(out)).size, (
+        "reported size must equal the encoded image"
+    )
+    assert size != img.size, "fixture must actually shrink"
+
+
+def test_noop_reports_original_size(restore_cap):
+    budget.MAX_OUT_KB = 0
+    img = _shot(400, 200)
+    raw = _lossless(img)
+    out, note, size = budget.fit_to_budget(img, raw, _downscale)
+    assert out is raw and note == "" and size == img.size
+
+
+def test_reserve_bytes_shrinks_the_usable_budget(restore_cap):
+    """An annotate=true response can carry one text line per detected element. If the
+    reserve stays at the 2KB default, the image fits but the COMBINED result does not."""
+    budget.MAX_OUT_KB = 20
+    img = _shot()
+    raw = _lossless(img)
+    small, _, _ = budget.fit_to_budget(img, raw, _downscale, reserve_bytes=15000)
+    big, _, _ = budget.fit_to_budget(img, raw, _downscale, reserve_bytes=512)
+    assert budget.b64_len(len(small)) <= 20 * 1024 - 15000
+    assert budget.b64_len(len(small)) < budget.b64_len(len(big))
+
+
+def test_reserve_bytes_has_a_floor(restore_cap):
+    """A caller passing 0 must not get the whole cap and overflow the envelope."""
+    budget.MAX_OUT_KB = 20
+    img = _shot()
+    out, _, _ = budget.fit_to_budget(img, _lossless(img), _downscale, reserve_bytes=0)
+    assert budget.b64_len(len(out)) <= 20 * 1024 - 512

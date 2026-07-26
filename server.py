@@ -1970,6 +1970,13 @@ def main():
                         inp.ui.shutdown()  # release uinput devices so reload doesn't leak them
                     except Exception:
                         pass
+                    # execv keeps os.environ but NOT interpreter state, and the client
+                    # does not re-send `initialize` over the preserved stdio connection —
+                    # so a cap learned from clientInfo would be silently lost and the very
+                    # next screenshot would be dropped by the client again. Pin it into the
+                    # environment, which _apply_client_limits then honours on restart.
+                    if budget.MAX_OUT_KB:
+                        os.environ["MCP_SCREEN_MAX_OUTPUT_KB"] = str(budget.MAX_OUT_KB)
                     os.execv(sys.executable, [sys.executable] + sys.argv)
                 t0 = time.time()
                 try:

@@ -94,12 +94,15 @@ find_python() {
   return 1
 }
 
-PY="$(find_python)" || {
+if ! PY="$(find_python)"; then
   # Nothing with gi. Retry ignoring it so the user gets a precise diagnosis from a running
   # server instead of a dead one — the system-layer hint below names the exact command.
+  # `|| true` is load-bearing: under `set -e` a bare failing assignment here aborts the
+  # script, making the diagnostic block below unreachable and leaving the user with a
+  # silent non-zero exit instead of the install hint.
   REQUIRE_GI=0
-  PY="$(find_python)"
-}
+  PY="$(find_python || true)"
+fi
 [ -n "${PY:-}" ] || {
   echo "screen-mcp: no Python >=${MIN_MAJOR}.${MIN_MINOR} found." >&2
   echo "  Set EIGHTYEIGHT_PYTHON=/path/to/python3 (or SCREEN_PYTHON), or install Python 3." >&2
@@ -225,6 +228,15 @@ if [ "${MCP_SCREEN_NO_AUTO_DEPS:-0}" != "1" ]; then
     echo "screen-mcp: provisioning Python deps (one time, ~200MB) ..." >&2
     # --system-site-packages is LOAD-BEARING: gi/GStreamer are system packages a plain
     # venv would hide, and the server dies with "No module named 'gi'" (verified).
+    # Only reuse an existing venv if it can still see the system layer. A tree left by an
+    # interrupted run — or created without --system-site-packages — otherwise short-circuits
+    # creation, gets the stamp written, and permanently locks the server onto an interpreter
+    # that cannot import gi.
+    if [ -d "$VENV" ] && [ "$REQUIRE_GI" = "1" ] \
+       && ! "${VENV}/bin/python" -c 'import importlib.util as u,sys; sys.exit(0 if u.find_spec("gi") else 1)' >/dev/null 2>&1; then
+      echo "screen-mcp: existing ${VENV} cannot import gi; rebuilding with --system-site-packages" >&2
+      if [ -n "${ROOT:-}" ] && [ "$VENV" = "${ROOT}/.venv" ]; then rm -rf "${ROOT}/.venv"; fi
+    fi
     if ! { [ -d "$VENV" ] || "$PY" -m venv --system-site-packages "$VENV" >/dev/null 2>&1; }; then
       # A FAILED `venv` still leaves a partial tree behind (it dies at the ensurepip step
       # after writing bin/python). That stub does NOT inherit system site-packages, so it

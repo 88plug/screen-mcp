@@ -4,6 +4,34 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
 
 ## Unreleased
 
+- **Fitted screenshots advertised the WRONG view transform — every capped-client click
+  missed by the shrink ratio.** `encode_store` stamped `SESSION["view"]` (scale/dw/dh) and
+  the response text BEFORE `fit_to_budget` re-encoded the image smaller, so the client
+  received a 526x296 image while both the text and the transform claimed 2576x1449 at
+  scale 0.6708. A model clicking what it saw had its coords divided by the pre-shrink
+  scale — landing ~4.9x short — and `view_id` could not catch it because the id never
+  changed. This is the exact "I clicked where I saw it but it missed" class the view_id
+  machinery exists to prevent, introduced by the cap-fitting work itself. `fit_to_budget`
+  now returns the size it actually encoded and `encode_store` restates the transform from
+  it. Verified live: a click at the shipped image's centre now maps to (1920, 1083) of a
+  3840x2160 desktop. Found by the max code review; two finders reached it independently.
+- **`screen_reload` silently lost a client-derived output cap.** The cap is learned from
+  the `initialize` handshake, but `os.execv` keeps only the environment and the client does
+  not re-send `initialize` over the preserved stdio connection — so after any reload a Grok
+  session fell back to uncapped and its next screenshot was dropped again. The resolved cap
+  is now pinned into `MCP_SCREEN_MAX_OUTPUT_KB` before the exec.
+- **The envelope reserve is no longer a fixed 2 KB.** `fit_to_budget` takes `reserve_bytes`
+  (floored at 512) and `encode_store` passes what it will actually emit, including the
+  stale-risk note. An `annotate=true` response carries a line per detected element, which
+  on a busy 4K desktop far exceeds 2 KB and would push the combined result back over the cap.
+- **`scripts/run-python.sh`: the no-Python diagnostic was unreachable.** Under
+  `set -euo pipefail` the retry assignment inside `|| { ... }` aborts the script on its own
+  failure, so a box with no usable Python got a bare non-zero exit instead of the install
+  hint. Reproduced standalone, fixed with `|| true` + an `if !` guard.
+- **`scripts/run-python.sh`: an existing venv without `--system-site-packages` was adopted.**
+  `[ -d "$VENV" ]` short-circuited creation, so a tree left by an interrupted run got the
+  stamp written and permanently locked the server onto an interpreter that cannot import
+  `gi`. It is now probed for `gi` and rebuilt when it fails.
 - **`requirements.txt` named an OCR package the code cannot import.** It listed
   `rapidocr-onnxruntime>=1.4` labelled "(RapidOCR v3)", but `grounding.py` does
   `from rapidocr import RapidOCR` and that distribution ships `rapidocr_onnxruntime`
