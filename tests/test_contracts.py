@@ -10,6 +10,7 @@ import ast
 import base64
 import io
 import pathlib
+from typing import Any, cast
 
 import pytest
 from PIL import Image
@@ -186,3 +187,38 @@ def _synthetic(w, h):
         for x in range(0, w, 160):
             img.paste((200, 200, 210), (x, y, min(x + 120, w), min(y + 18, h)))
     return img
+
+
+def test_v6_model_type_is_requested_explicitly(monkeypatch):
+    """RapidOCR 3.9.2 defaults model_type to "small", and v6_small measured SLOWER than the
+    v4 baseline we are replacing (38.5s CPU vs 24.8s). So a plain version bump is a
+    regression unless TINY is named explicitly. Pin that it always is."""
+    import types
+
+    import grounding as g
+
+    fake = cast(Any, types.ModuleType("rapidocr"))
+    fake.OCRVersion = types.SimpleNamespace(PPOCRV6="v6")
+    fake.ModelType = types.SimpleNamespace(TINY="tiny", SMALL="small")
+    monkeypatch.setitem(__import__("sys").modules, "rapidocr", fake)
+    monkeypatch.delenv("MCP_SCREEN_OCR_MODEL", raising=False)
+
+    p = g._v6_tiny_params()
+    assert p["Det.model_type"] == "tiny", "TINY must be explicit; the default is small"
+    assert p["Rec.model_type"] == "tiny"
+    assert p["Det.ocr_version"] == "v6" and p["Rec.ocr_version"] == "v6"
+
+    monkeypatch.setenv("MCP_SCREEN_OCR_MODEL", "small")
+    assert g._v6_tiny_params()["Rec.model_type"] == "small", "override must be honoured"
+
+
+def test_v6_params_degrade_on_older_rapidocr(monkeypatch):
+    """v6 first appears in rapidocr 3.9.2. On anything older this must return {} so the
+    engine keeps working defaults rather than raising at construction."""
+    import types
+
+    import grounding as g
+
+    fake = cast(Any, types.ModuleType("rapidocr"))  # no OCRVersion/ModelType attributes
+    monkeypatch.setitem(__import__("sys").modules, "rapidocr", fake)
+    assert g._v6_tiny_params() == {}

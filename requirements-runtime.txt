@@ -11,7 +11,7 @@
 -r requirements-core.txt
 opencv-python-headless>=4.8   # INTER_AREA downscale (15x faster than PIL) + OmniParser NMS
 onnxruntime>=1.18             # OmniParser icon_detect (CPU-only, YOLOv8 ONNX)
-rapidocr>=3.0                 # OCR backend (import is `from rapidocr import RapidOCR`)
+rapidocr>=3.9.2                 # OCR backend (import is `from rapidocr import RapidOCR`)
 # evdev is deliberately NOT here. It has no wheel: it compiles against kernel headers
 # (linux/input.h) and hard-fails where they are absent, which sank the ENTIRE install --
 # one unbuildable dep took opencv, onnxruntime and rapidocr down with it (measured in a

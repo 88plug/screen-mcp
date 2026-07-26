@@ -178,14 +178,57 @@ def _build_ocr():
     rest of the desktop. Measured on 24 cores: auto=55.5s wall/610s cpu,
     6 threads=25.9s wall/161s cpu. Fewer threads is faster here."""
     _patch_ort_spinning()
-    return RapidOCR(
-        params={
-            "EngineConfig.onnxruntime.intra_op_num_threads": _CPU_THREADS,
-            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
-            # Screen text is upright; the angle classifier is ~5% of CPU and pure waste here.
-            "Global.use_cls": False,
-        }
-    )
+    params = {
+        "EngineConfig.onnxruntime.intra_op_num_threads": _CPU_THREADS,
+        "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+        # Screen text is upright; the angle classifier is ~5% of CPU and pure waste here.
+        "Global.use_cls": False,
+    }
+    params.update(_v6_tiny_params())
+    return RapidOCR(params=params)
+
+
+def _v6_tiny_params():
+    """Pin PP-OCRv6 TINY when the installed RapidOCR offers it.
+
+    Measured against the shipped default (v4 mobile) on a synthetic 1600x900 frame of 48
+    known UI strings — real labels, paths, shell prompts — at 13/15/18/22px:
+
+        model       CPU     wall   exact match   CER
+        v4_mobile   24.8s   3.8s     28/48      0.323   <- what we shipped
+        v6_tiny      9.5s   1.0s     32/48      0.313   <- this
+        v6_small    38.5s   6.0s     36/48      0.272
+
+    So tiny is 2.6x cheaper AND more accurate here. That is worth stating plainly because
+    Baidu's own table reports v6_tiny English at 77.3% vs v6_small 86.3%, which predicted a
+    regression on English UI text; on this workload it did not appear. v6_small is the most
+    accurate but costs MORE than the v4 baseline, so it is not a default — set
+    MCP_SCREEN_OCR_MODEL=small if accuracy matters more than latency.
+
+    TINY must be requested EXPLICITLY: RapidOCR 3.9.2 defaults model_type to "small", so a
+    plain version bump silently lands on the slowest option. Params are Enums; passing
+    strings raises TypeError. Returns {} on older RapidOCR (v6 first appears in 3.9.2), so
+    the engine simply keeps its previous defaults.
+    """
+    want = os.environ.get("MCP_SCREEN_OCR_MODEL", "tiny").lower()
+    try:
+        from rapidocr import ModelType, OCRVersion  # type: ignore[import-not-found]
+
+        # getattr, not attribute access: on rapidocr < 3.9.2 these members do not exist at
+        # all (the installed 3.8.1 has only PPOCRV4/PPOCRV5), so naming them statically is
+        # both a type error and a runtime AttributeError waiting for an older install.
+        version = getattr(OCRVersion, "PPOCRV6", None)
+        model = getattr(ModelType, "SMALL" if want == "small" else "TINY", None)
+        if version is None or model is None:
+            return {}
+    except Exception:
+        return {}
+    return {
+        "Det.ocr_version": version,
+        "Rec.ocr_version": version,
+        "Det.model_type": model,
+        "Rec.model_type": model,
+    }
 
 
 def ocr_boxes(bgr):
