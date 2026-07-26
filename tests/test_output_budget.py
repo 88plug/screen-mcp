@@ -64,7 +64,9 @@ def test_oversized_payload_is_fitted_and_still_decodes(restore_cap):
     out, note = capture._fit_to_budget(img, raw)
 
     assert capture._b64_len(len(out)) <= 20 * 1024 - 2048, "must fit the cap"
-    assert "shrunk" in note and "region=" in note, "must tell the agent how to get detail"
+    assert "shrunk" in note and "region=" in note, (
+        "must tell the agent how to get detail"
+    )
     Image.open(io.BytesIO(out)).load()  # a truncated image would raise here
 
 
@@ -104,7 +106,8 @@ def test_client_cap_detection(client, expected, restore_cap, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "params", [{}, {"clientInfo": None}, {"clientInfo": {}}, {"clientInfo": {"name": None}}]
+    "params",
+    [{}, {"clientInfo": None}, {"clientInfo": {}}, {"clientInfo": {"name": None}}],
 )
 def test_malformed_handshake_does_not_raise(params, restore_cap, monkeypatch):
     monkeypatch.delenv("MCP_SCREEN_MAX_OUTPUT_KB", raising=False)
@@ -136,7 +139,9 @@ def test_region_with_monitor_is_translated_not_dropped(monkeypatch):
 
     monkeypatch.setattr(cap, "ensure_geo", lambda force=False: geo)
     monkeypatch.setattr(cap, "validate_scope", lambda *a, **k: None)
-    monkeypatch.setattr(cap, "monitors_for", lambda r: (seen.update(region=r), [geo[0]])[1])
+    monkeypatch.setattr(
+        cap, "monitors_for", lambda r: (seen.update(region=r), [geo[0]])[1]
+    )
     monkeypatch.setattr(cap.state, "SESSION", {"W": 7680, "H": 2160})
 
     class _Img:
@@ -150,7 +155,9 @@ def test_region_with_monitor_is_translated_not_dropped(monkeypatch):
     )
 
     cap.capture_desktop(region=[0, 0, 600, 300], monitor=1)
-    assert seen["region"] == [3840, 0, 600, 300], "region must be offset by monitor origin"
+    assert seen["region"] == [3840, 0, 600, 300], (
+        "region must be offset by monitor origin"
+    )
     assert seen["crop"] == (3840, 0, 4440, 300)
 
 

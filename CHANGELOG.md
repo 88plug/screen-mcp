@@ -4,6 +4,53 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
 
 ## Unreleased
 
+- **OCR grounding is 2.1x faster and burns 3.8x less CPU — `screen_read_text` on an
+  uncached 4K monitor went 85 s → 40.6 s.** Profiling the stages (not guessing) put 98.3%
+  of the cost in OCR (ocr 56327 ms vs omni 721 ms, cv 221 ms), and splitting OCR put it in
+  recognition, not detection (det 3482 ms, det+rec 56072 ms). Two plausible fixes were
+  measured and both were WRONG: more threads / bigger rec batch made it worse
+  (50.7 s → 69.4 s → 84.1 s), and downscaling the frame saved 12% while losing 54% of the
+  text. The real signal was 55 s wall against **610 s of process CPU** — onnxruntime's
+  default `intra_op_num_threads=-1` spawns a thread per core and they spin-wait instead of
+  progressing. Fewer threads is faster: 24→55.5 s/610 s, 4→32.2 s/137 s, **6→25.9 s/161 s**
+  (knee), 8→26.9 s/210 s, 12→33.7 s/334 s. `_omni_session` already capped at 6; `ocr_boxes`
+  never got the same treatment, so both ONNX consumers now share one `_CPU_THREADS`
+  (`MCP_SCREEN_CPU_THREADS`). The 610 s also starved the rest of the desktop, so this is a
+  politeness fix as much as a speed one. Regression test is mutation-checked.
+- **Screenshots are no longer DROPPED on clients that cap tool output.** Grok Build
+  truncates an MCP tool result at 20 KB; our ~900 KB of base64 was cut mid-string, failed
+  its image integrity check ("image bytes are truncated"), and the image was discarded
+  entirely — screen-mcp was effectively blind under Grok, while the tool call still looked
+  successful. `encode_store` now fits the payload to the cap, sized analytically (encoded
+  size tracks pixel count, so one lossy probe predicts the scale) with a halving fallback
+  so fitting is guaranteed. The cap comes from the `initialize` handshake's `clientInfo`,
+  so nothing needs configuring; Claude stays uncapped on a byte-identical no-op path.
+  A real 4K shot lands ~15 KB and stays legible; region shots (~3 KB) were never affected.
+- **`region` + `monitor` together no longer silently drops the region.** `capture_desktop`
+  returned early on `monitor is not None`, before the `region` branch, so asking for
+  `region=[0,0,600,300] monitor=0` handed back the whole 3840x2160 monitor with no error —
+  a plausible-but-wrong result. They now mean "this box, relative to that monitor's origin";
+  `region` alone stays desktop-absolute. Both contracts pinned by tests.
+- **A fresh clone now provisions its whole runtime itself.** `pyproject.toml` declared no
+  dependencies and the launcher looked for a `.venv` nothing ever created, so users hit a
+  server that would not import. `scripts/run-python.sh` now provisions the full runtime set
+  by default (a server that starts with no OCR reads as broken, not as a missing extra).
+  Six failures found by running it in a clean container, none visible on a working desktop:
+  `evdev` has no wheel and its failure sank the entire install (now separate, best-effort,
+  prefers `evdev-binary`); the first interpreter on PATH usually lacks `gi` (selection now
+  prefers a gi-capable one); Debian ships `venv` separately (falls back to
+  `pip install --target` + PYTHONPATH); that interpreter often has no pip or ensurepip
+  (pip's `--python` lets any pip-capable python populate the target with the right ABI);
+  a FAILED venv leaves a partial tree that hid `gi` and won selection (removed on failure,
+  and a venv is only adopted if it kept `gi`); and `rapidocr` pulls non-headless opencv so
+  `cv2` died on `libGL` (headless force-reinstalled last). Satisfaction checks use
+  `find_spec` rather than importing — importing onnxruntime per start cost ~3 s (3.4 s →
+  0.65 s). Measured: **musl is not viable** — onnxruntime publishes no musl wheel, so an
+  Alpine build silently loses OmniParser grounding; glibc/manylinux stays. PyGObject,
+  GStreamer and PipeWire remain the one layer that cannot ship with us (no wheel; they bind
+  the host typelibs and running compositor), so the launcher now prints the exact
+  pacman/apt/dnf command instead of a generic error.
+
 - **WebP lossless encode is ~19x cheaper — a plain screenshot went 4194 ms → 1286 ms.**
   Encoding was 85% of a shot's wall time (3564 ms of it), measured on a real 2576x1449
   frame. libwebp's `method`/`quality` only trade CPU for bytes in lossless mode — the

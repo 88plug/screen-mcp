@@ -310,9 +310,7 @@ def watch_1fps(args):
             img, ox, oy = capture.capture_desktop(crop)
         except Exception as e:
             return {
-                "content": [
-                    _txt(f"WATCH: capture failed on sample {i}: {e}")
-                ],
+                "content": [_txt(f"WATCH: capture failed on sample {i}: {e}")],
                 "isError": True,
             }
 
@@ -406,9 +404,7 @@ def watch_1fps(args):
         f"reason: {verdict['reason']}\n"
         f"stats: {verdict.get('stats')}\n"
         f"{el_note.strip()}\n"
-        f"timeline (human-eye {fps:g} fps):\n"
-        + "\n".join(timeline_lines)
-        + "\n\n"
+        f"timeline (human-eye {fps:g} fps):\n" + "\n".join(timeline_lines) + "\n\n"
         "HOW TO USE: jitter → fix continuous animation / cap graph nodes before "
         "declaring UI ok. evolving → re-ground on last frame. settled → act. "
         "A single screenshot is a glance; this is watching."
