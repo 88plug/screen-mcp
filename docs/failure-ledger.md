@@ -38,12 +38,26 @@ headless run — the pattern matters more than the individual bugs.
 - **Wrote a poll loop whose heredoc never exported its variable** and let it spin for ten
   minutes doing nothing.
 
+## Closed since
+
+- **The X11 backend now runs end-to-end on a real X11 session** (Ubuntu 24.04 / GNOME 46 /
+  Xorg, in `tests/vmbed`): geometry `[{0,0,1280,800}]`, pixel-validated `available`, a
+  1280x800 grab at stddev 18.7, and a working region crop. `./verify.sh both` reproduces it.
+- That run immediately found a defect the unit tests could not: the pipeline hard-coded
+  `leaky-type=downstream`, which does not exist before GStreamer 1.28, so it failed to parse
+  on the **current Ubuntu LTS**. A note in `capture.py` claimed `drop=` had been removed in
+  1.28 — it had not; 1.28 exposes both. Property is now chosen at runtime.
+- **AT-SPI needs no app restart.** The conclusion recorded here earlier was wrong: both VM
+  beds expose apps (6 and 13) with `toolkit-accessibility=false`. This host reported 0 only
+  because it sets `NO_AT_BRIDGE=1` / `GTK_A11Y=none` in `/etc/environment`. The measurement
+  was real; the inference was not.
+
 ## Still unverified
 
-- The X11 capture backend has **never run end-to-end on a real X11 session**. The borrowed
-  host was too old (no portal, GStreamer 1.14, Python 3.8) and became unreachable; the local
-  VM bed does not yet reach a desktop.
-- AT-SPI was measured only against `gnome-calculator`, not a real application mix.
+- Pixels have not been pulled through the in-guest PipeWire ScreenCast stream. The portal
+  interfaces and `AvailableSourceTypes` are proven on both beds; the frame path is not.
+- `/dev/uinput` is not writable in the guests, so the uinput input backend is untested there.
+- AT-SPI has still only been exercised against a small app mix, not a browser under load.
 
 ## Corrective principles
 

@@ -27,8 +27,8 @@ import socket
 import sys
 import time
 
-STATE = os.environ.get("SMCP_VM_STATE", os.path.expanduser("~/.cache/screen-mcp-vmbed"))
-VMS = {"wayland": "smcp-wayland", "x11": "smcp-x11"}
+STATE = os.environ.get("SMCP_VM_STATE", "/var/tmp/vmbed")
+VMS = {"wayland": "gnomevm", "x11": "x11vm"}
 
 
 class Qmp:
