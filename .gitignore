@@ -24,3 +24,5 @@ EVAL_REPORT.md
 #   ~/.local/state/mcp-screen/actions.jsonl     reliability audit log
 #   ~/.config/mcp-screen/token                  portal restore token
 #   /tmp/screen_err.txt                         last unhandled tool traceback
+.deps/
+.provisioned-*
