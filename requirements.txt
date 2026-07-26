@@ -3,7 +3,7 @@
 # REQUIRED — the core server (capture + input + recorder + sense + worldmodel) will
 # not function without these.
 numpy>=1.26
-Pillow>=10.0
+Pillow>=12.3.0
 
 # OPTIONAL — grounding (annotate=true / Set-of-Marks). Each backend is imported in
 # its own try/except; the server runs without them but annotate=true returns the

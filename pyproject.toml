@@ -8,7 +8,7 @@ version = "0.0.0"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.26",
-    "Pillow>=10.0",
+    "Pillow>=12.3.0",
     "opencv-python-headless>=4.8",
     "onnxruntime>=1.18",
     "rapidocr>=3.9.2",   # PP-OCRv6 TINY first appears here; see grounding._v6_tiny_params
