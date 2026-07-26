@@ -43,6 +43,7 @@ import numpy as np  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
 import budget  # noqa: E402
+import x11capture  # noqa: E402
 import state  # noqa: E402
 
 LANCZOS = Image.Resampling.LANCZOS
@@ -944,13 +945,64 @@ def _prime_static(mons):
                 pass
 
 
+#: True once we have fallen back to plain X11 capture for this process.
+X11_MODE = False
+
+
+def _x11_geo():
+    """Geometry from xrandr for the X11 fallback. Same shape the portal path produces, minus
+    `node` (there are no PipeWire nodes) — scale is 1.0 because X11 reports device pixels."""
+    mons = x11capture.geometry()
+    geo = []
+    for i, m in enumerate(mons):
+        geo.append(
+            {
+                "node": None,
+                "x": m["x"],
+                "y": m["y"],
+                "w": m["w"],
+                "h": m["h"],
+                "sx": 1.0,
+                "sy": 1.0,
+                "live": True,
+                "power": "unknown",
+            }  # fmt: skip
+        )
+    if not geo:
+        return None
+    state.SESSION["geo"] = geo
+    state.SESSION["W"] = max(m["x"] + m["w"] for m in geo)
+    state.SESSION["H"] = max(m["y"] + m["h"] for m in geo)
+    return geo
+
+
 def ensure_geo(force=False):
     """Compute (and cache) per-monitor native-pixel geometry. Runtime only.
 
     For each stream: read logical position/size from props, grab once for native
     frame size, derive scale, and place the monitor on the global native canvas.
-    Stores state.SESSION['geo'] and the canvas bounds W/H."""
-    state.ensure_session()
+    Stores state.SESSION['geo'] and the canvas bounds W/H.
+
+    X11 FALLBACK: on a host with no working ScreenCast portal (measured on GNOME/X11 Zorin
+    15.3: portal binary absent, 0 portal interfaces on the bus, GStreamer 1.14 without
+    appsink `leaky-type`) the portal session cannot start at all. Rather than fail, fall
+    back to plain X11 capture, which works there. Input is unaffected — it already rides
+    kernel uinput, which is display-server agnostic."""
+    global X11_MODE
+    if state.SESSION["geo"] and not force:
+        return state.SESSION["geo"]
+    if X11_MODE:
+        return _x11_geo() or state.SESSION["geo"]
+    try:
+        state.ensure_session()
+    except Exception:
+        if x11capture.available():
+            X11_MODE = True
+            state.log("portal unavailable; falling back to plain X11 capture")
+            g = _x11_geo()
+            if g:
+                return g
+        raise
     if state.SESSION["geo"] and not force:
         return state.SESSION["geo"]
     # Probe all streams CONCURRENTLY: each cold pipeline build blocks ~8s, and they no longer
@@ -1164,6 +1216,36 @@ def capture_desktop(region=None, monitor=None, fresh=False):
     nudge per static monitor, so callers pass it when freshness matters (a normal screenshot),
     not for bulk/locate composites."""
     geo = ensure_geo()
+    if X11_MODE:
+        # No PipeWire nodes here: grab the root once and crop. Region/monitor semantics
+        # match the portal path so callers and view transforms are identical.
+        if isinstance(region, str):
+            try:
+                region = json.loads(region)
+            except Exception:
+                region = None
+        if monitor is not None and region:
+            m = geo[int(monitor)]
+            rx, ry, rw, rh = (int(v) for v in region)
+            rx, ry = max(0, rx), max(0, ry)
+            rw, rh = max(1, min(rw, m["w"] - rx)), max(1, min(rh, m["h"] - ry))
+            region, monitor = [m["x"] + rx, m["y"] + ry, rw, rh], None
+        if monitor is not None:
+            m = geo[int(monitor)]
+            img = x11capture.grab_region(m["x"], m["y"], m["w"], m["h"])
+            if img is None:
+                raise RuntimeError("X11 capture failed for monitor %s" % monitor)
+            return img, m["x"], m["y"]
+        if region:
+            rx, ry, rw, rh = (int(v) for v in region)
+            img = x11capture.grab_region(rx, ry, rw, rh)
+            if img is None:
+                raise RuntimeError("X11 capture failed for region %s" % (region,))
+            return img, rx, ry
+        img = x11capture.grab_root()
+        if img is None:
+            raise RuntimeError("X11 root capture failed")
+        return img, 0, 0
     # Single-monitor/region grabber. fresh=True nudges for a current frame. Otherwise use a
     # NON-DESTRUCTIVE grab (rebuild=False): it returns the new/last-retained frame and RAISES on a
     # cold monitor WITHOUT dropping+rebuilding the pipeline — the destructive rebuild (_grab_or_prime

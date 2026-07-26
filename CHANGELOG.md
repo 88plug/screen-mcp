@@ -4,6 +4,32 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
 
 ## Unreleased
 
+- **New `x11capture.py`: plain X11 capture as a fallback when the portal is unusable.**
+  Measured on GNOME/X11 (Zorin OS 15.3): no `xdg-desktop-portal`, 0 portal interfaces on the
+  bus, GStreamer 1.14 without appsink `leaky-type` — our pipeline cannot start there, but
+  `import -window root` captured a real frame and `/dev/uinput` was writable, so INPUT
+  already worked unchanged. `ensure_geo()` now falls back to X11 (xrandr geometry, root grab
+  + crop) instead of failing. Zero new dependencies: Pillow's XCB grab first, else an
+  external grabber that was already installed. gi-free so CI executes it.
+  `available()` is a REAL probe, not a PATH check — on Xwayland a grabber exists but the root
+  rejects XGetImage, which made a PATH-only check claim availability while every grab
+  returned None. Opt out with `MCP_SCREEN_NO_X11=1`.
+- **New `atspi_tree.py`: AT-SPI as an opt-in accelerator, never the primary path.** Measured
+  first: 0 apps exposed with `toolkit-accessibility=false`, still 0 right after enabling it
+  (running apps read it at startup), and a full widget tree for an app launched afterwards.
+  So it needs a global toggle AND an app restart — useless for the already-open desktop
+  screen-mcp exists to drive. `_perceive` now tries it before OCR and falls through on an
+  empty result; where an app does expose a11y it yields exact roles, labels and clickable
+  desktop centres (verified: 110 elements from one app) against a multi-second OCR pass.
+  `screen_diag` reports WHY the tree is empty so an empty list is never read as an empty
+  screen. Opt out with `MCP_SCREEN_ATSPI=0`.
+- **Two latent process-killing aborts fixed, both found by running the suite headless.**
+  `Gio.Settings.new()` calls `abort()` when dconf is unavailable, and `Atspi.init()` calls
+  `abort()` when the accessibility bus is missing — neither raises, so no `try/except` helps
+  and either would have taken the whole MCP server down on a `screen_diag` from a headless
+  or minimal-desktop host. The toggle is now read via `gsettings` out-of-process, and
+  `Atspi.init()` is never reached unless a D-Bus probe confirms `org.a11y.Bus` has an owner.
+  Both pinned by regression tests.
 - **`screen_diag` no longer misdiagnoses non-Wayland sessions.** The session check hard-failed
   anything without `WAYLAND_DISPLAY` as "screen-mcp targets GNOME on Wayland only", which
   hides the actual blocker. Measured on a real GNOME/**X11** box (Zorin OS 15.3): what stops

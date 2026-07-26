@@ -60,6 +60,8 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # hard no-GPU: grounding is C
 import numpy as np
 
 import state
+import x11capture
+import atspi_tree
 import budget
 import capture
 import input as inp
@@ -473,6 +475,19 @@ def _perceive(img, ox, oy, aware):
             {"label": v.get("label"), "role": v.get("role"), "abs": (v["x"], v["y"])}
             for v in hit["elements"].values()
         ], False
+    # AT-SPI fast path: when the focused app exposes accessibility we get exact roles,
+    # labels and DESKTOP-absolute centres for ~nothing, against a multi-second OCR +
+    # icon-detection pass. Usually returns nothing (the toggle is off, or the app started
+    # before it was on) — an empty list means "no information", so we fall through to OCR
+    # rather than reporting an empty screen.
+    with state.stage("atspi"):
+        acc = [
+            {"label": e["text"], "role": e["role"], "abs": (e["x"], e["y"])}
+            for e in atspi_tree.elements()
+            if ox <= e["x"] < ox + img.width and oy <= e["y"] < oy + img.height
+        ]
+    if acc:
+        return acc, False
     try:
         with state.stage("ground"):
             _m, raw = grounding.annotate(img)
@@ -811,6 +826,8 @@ def tool_diag(args):
             "elements_cached": len(state.SESSION.get("elements") or {}),
         },
         "cursor": capture.diag(),
+        "atspi": atspi_tree.diag(),
+        "x11": x11capture.diag(),
         "guard": {
             "cmd_cursor": state.SESSION.get("cmd_cursor"),
             "threshold_px": inp.GUARD_THRESH,
