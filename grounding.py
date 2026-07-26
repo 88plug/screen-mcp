@@ -62,6 +62,20 @@ _OCR = None  # type: ignore
 _FONT = None  # type: ignore
 _OMNI_SESS = None  # type: ignore
 _OCR_LOCK = threading.Lock()
+# Shared ONNX thread cap for BOTH the OCR engine and the OmniParser session.
+#
+# DO NOT set this to the core count, and do not remove it. onnxruntime's default (-1 = one
+# thread per core) makes its threads spin-wait rather than progress. Measured on a 24-core
+# box, one uncached 4K screen_read_text:
+#   threads=auto(24)  55.5s wall   610s CPU   <- default, pathological
+#   threads=4         32.2s wall   137s CPU
+#   threads=6         25.9s wall   161s CPU   <- knee
+#   threads=8         26.9s wall   210s CPU
+#   threads=12        33.7s wall   334s CPU
+# Past 6 both wall AND CPU get worse. The 610s figure also starved the rest of the
+# desktop, so this is a politeness fix as much as a speed one. 6 was already the
+# OmniParser default here; OCR simply never got the same cap.
+_CPU_THREADS = int(os.environ.get("MCP_SCREEN_CPU_THREADS", "6"))
 _OMNI_LOCK = threading.Lock()
 
 
@@ -116,7 +130,18 @@ def ocr_boxes(bgr):
         if _OCR is None:
             with _OCR_LOCK:  # double-checked: a second concurrent caller must not build a second engine
                 if _OCR is None:
-                    _OCR = RapidOCR()
+                    # Cap ONNX threads, exactly as _omni_session() already does. Left at
+                    # RapidOCR's default (intra_op=-1 -> one thread per core) a single 4K
+                    # read burned 610 CPU-SECONDS for 55s of wall — the threads spin-wait
+                    # rather than progress, so it was both slower AND starving the rest of
+                    # the desktop. Measured on 24 cores: auto=55.5s wall/610s cpu,
+                    # 6 threads=25.9s wall/161s cpu. Fewer threads is faster here.
+                    _OCR = RapidOCR(
+                        params={
+                            "EngineConfig.onnxruntime.intra_op_num_threads": _CPU_THREADS,
+                            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+                        }
+                    )
         res = _OCR(bgr)
     except Exception:
         return []
@@ -215,9 +240,7 @@ def _omni_session():
         with _OMNI_LOCK:  # double-checked: avoid two ONNX sessions racing on first call
             if _OMNI_SESS is None:
                 so = _ort.SessionOptions()
-                so.intra_op_num_threads = int(
-                    os.environ.get("MCP_SCREEN_CPU_THREADS", "6")
-                )
+                so.intra_op_num_threads = _CPU_THREADS
                 so.inter_op_num_threads = 1
                 _OMNI_SESS = _ort.InferenceSession(
                     _OMNI_MODEL, sess_options=so, providers=["CPUExecutionProvider"]
@@ -235,7 +258,7 @@ def diag():
         "omni_model": _OMNI_MODEL,
         "omni_warmed": _OMNI_SESS is not None,
         "ocr_warmed": _OCR is not None,
-        "cpu_threads": int(os.environ.get("MCP_SCREEN_CPU_THREADS", "6")),
+        "cpu_threads": _CPU_THREADS,
     }
 
 

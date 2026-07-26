@@ -6,6 +6,7 @@ callers must each see EXACTLY one constructed engine. The fake backends below sl
 inside __init__ to widen the race window, so an unlocked implementation would build
 the engine multiple times and the test would fail."""
 
+import os
 import threading
 import time
 import types
@@ -86,7 +87,11 @@ class _CountingOCR:
     count = 0
     _lock = threading.Lock()
 
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
+        # Must accept kwargs: ocr_boxes constructs RapidOCR(params={...}) to cap ONNX
+        # threads. A no-arg stub raises TypeError, which ocr_boxes swallows, and the
+        # test then silently measures nothing (count==0) instead of the race.
+        self.kwargs = kwargs
         with _CountingOCR._lock:
             _CountingOCR.count += 1
         time.sleep(0.05)  # widen the window so an unlocked impl will lose the race
@@ -179,3 +184,38 @@ def test_ocr_and_omni_locks_are_independent(fake_backends):
     t2.join()
     elapsed = time.monotonic() - started
     assert elapsed < 0.09, f"OCR and OmniParser init serialised (took {elapsed:.3f}s)"
+
+
+def test_ocr_engine_gets_a_bounded_thread_cap(monkeypatch):
+    """onnxruntime's default (-1 = one thread per core) makes its threads spin-wait:
+    measured 610 CPU-SECONDS for a single uncached 4K read, and SLOWER in wall-clock than
+    6 threads. Regressing this to -1/unset is a 2x wall and 4x CPU loss, so pin it."""
+    import grounding as g
+
+    captured = {}
+
+    class _Spy:
+        def __init__(self, *a, **kw):
+            captured.update(kw.get("params") or {})
+
+        def __call__(self, *a, **kw):
+            return None
+
+    monkeypatch.setattr(g, "_HAVE_OCR", True)
+    monkeypatch.setattr(g, "RapidOCR", _Spy)
+    monkeypatch.setattr(g, "_OCR", None)
+    g.ocr_boxes(np.zeros((8, 8, 3), dtype=np.uint8))
+
+    intra = captured.get("EngineConfig.onnxruntime.intra_op_num_threads")
+    assert intra is not None, "OCR engine must pin intra_op threads, not inherit -1"
+    assert 1 <= intra <= 8, f"thread cap {intra} outside the measured sane band"
+    assert captured.get("EngineConfig.onnxruntime.inter_op_num_threads") == 1
+
+
+def test_omni_and_ocr_share_one_thread_cap():
+    """One knob for both ONNX consumers — divergence is how OCR ended up uncapped while
+    OmniParser was already limited to 6."""
+    import grounding as g
+
+    assert g._CPU_THREADS == int(os.environ.get("MCP_SCREEN_CPU_THREADS", "6"))
+    assert g.diag()["cpu_threads"] == g._CPU_THREADS
