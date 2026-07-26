@@ -60,6 +60,7 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # hard no-GPU: grounding is C
 import numpy as np
 
 import state
+import budget
 import capture
 import input as inp
 import grounding
@@ -1885,7 +1886,7 @@ def _apply_client_limits(params):
     name = str((params.get("clientInfo") or {}).get("name", "")).lower()
     for key, kb in _CLIENT_OUT_KB.items():
         if key in name:
-            capture.MAX_OUT_KB = kb
+            budget.MAX_OUT_KB = kb
             state.log(f"client '{name}': capping tool output at {kb}KB")
             return
 

@@ -4,6 +4,15 @@ Calver headings match the 88plug hub (`YEAR.MONTH.<commit-count>` on `main`).
 
 ## Unreleased
 
+- **Output-budget fitting moved to `budget.py` so CI actually executes it.** The logic sat
+  in `capture.py`, which cannot be imported without a real gi/GStreamer/D-Bus session — a
+  headless run substitutes a stub `capture`, so the tests raised `AttributeError` and CI was
+  red on every commit from `ce7534d` to `3736ab4` while passing locally. `budget.py` imports
+  only stdlib + Pillow and takes the downscaler INJECTED, the same discipline
+  `reliability.py` already uses for its grabber. `budget.MAX_OUT_KB` is now the single source
+  of truth (capture reads it, `server._apply_client_limits` writes it) instead of two copies
+  that could drift. 11 budget tests now run headless (156 passed / 28 skipped, up from
+  146 / 33) and are mutation-checked: shortening the fit loop fails them.
 - **OCR grounding is 2.1x faster and burns 3.8x less CPU — `screen_read_text` on an
   uncached 4K monitor went 85 s → 40.6 s.** Profiling the stages (not guessing) put 98.3%
   of the cost in OCR (ocr 56327 ms vs omni 721 ms, cv 221 ms), and splitting OCR put it in
