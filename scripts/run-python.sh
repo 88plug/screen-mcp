@@ -273,6 +273,17 @@ if [ "${MCP_SCREEN_NO_AUTO_DEPS:-0}" != "1" ]; then
     return 1
   }
 
+  # True when the --target dir exists AND the hard deps import through it. Restoring this
+  # after it was accidentally deleted: both call sites survived, so the launcher printed
+  # "_use_target_if_ready: command not found" and silently skipped adopting a perfectly good
+  # --target install.
+  _use_target_if_ready() {
+    [ -d "$DEPS" ] || return 1
+    PYTHONPATH="${DEPS}${PYTHONPATH:+:$PYTHONPATH}" "$PY" \
+      -c 'import importlib.util as u,sys; sys.exit(0 if all(u.find_spec(m) for m in ("numpy","PIL")) else 1)' \
+      >/dev/null 2>&1
+  }
+
   _provision_target() {
     local req="$1" helper
     "$PY" -m pip --version >/dev/null 2>&1 \
@@ -316,7 +327,7 @@ if [ "${MCP_SCREEN_NO_AUTO_DEPS:-0}" != "1" ]; then
       fi
       # No venv module. Layer deps onto the current (gi-capable) interpreter instead.
       echo "screen-mcp: venv unavailable; installing into ${DEPS} instead ..." >&2
-      _provision_target "$REQ_SYNC" || _provision_target "${ROOT}/requirements-core.txt" || {
+      _provision_target "$REQ" || _provision_target "${ROOT}/requirements-core.txt" || {
         echo "screen-mcp: dep provisioning FAILED (offline, or no pip)." >&2
         echo "  ${PY} -m pip install --target ${DEPS} -r ${REQ}" >&2
       }
@@ -327,7 +338,7 @@ if [ "${MCP_SCREEN_NO_AUTO_DEPS:-0}" != "1" ]; then
       fi
     elif true; then
       "${VENV}/bin/python" -m pip install --quiet --upgrade pip >&2 2>/dev/null
-      if "${VENV}/bin/python" -m pip install --quiet -r "$REQ_SYNC" >&2; then
+      if "${VENV}/bin/python" -m pip install --quiet -r "$REQ" >&2; then
         : > "$STAMP"
         # evdev separately and best-effort: it builds against kernel headers and its
         # failure must never sink the grounding stack (it did — measured). Prefer the
