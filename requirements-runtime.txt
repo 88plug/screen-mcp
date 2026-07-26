@@ -9,7 +9,7 @@
 # wheel, so an Alpine/musl build silently loses OmniParser grounding entirely. numpy and
 # Pillow do have musl wheels; onnxruntime is the wall. Do not "simplify" this to Alpine.
 -r requirements-core.txt
-opencv-python-headless>=4.8   # INTER_AREA downscale (15x faster than PIL) + OmniParser NMS
+opencv-python-headless>=5.0.0.93   # INTER_AREA downscale (15x faster than PIL) + OmniParser NMS
 onnxruntime>=1.18             # OmniParser icon_detect (CPU-only, YOLOv8 ONNX)
 rapidocr>=3.9.2                 # OCR backend (import is `from rapidocr import RapidOCR`)
 # evdev is deliberately NOT here. It has no wheel: it compiles against kernel headers
