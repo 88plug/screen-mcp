@@ -22,7 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 # evdev has NO wheels (0 on PyPI); evdev-binary ships 14. Building evdev needs kernel
 # headers, and its failure previously sank the entire install.
-uinput = ["evdev-binary>=1.9"]
+uinput = ["evdev-binary>=1.9.3"]
 
 [tool.uv]
 package = false
