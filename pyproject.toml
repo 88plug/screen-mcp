@@ -10,7 +10,7 @@ dependencies = [
     "numpy>=1.26",
     "Pillow>=10.0",
     "opencv-python-headless>=4.8",
-    "onnxruntime>=1.18",
+    "onnxruntime>=1.24.3",
     "rapidocr>=3.9.2",   # PP-OCRv6 TINY first appears here; see grounding._v6_tiny_params
     # X11 capture fallback. Pure-ctypes XCB (py3-none-any wheel, no compilation, no runtime
     # pip deps). Load-bearing on X11: it reads XRandR in-process, so per-monitor geometry
