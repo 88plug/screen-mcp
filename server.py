@@ -1999,6 +1999,8 @@ def main():
                 )
             elif method == "notifications/initialized":
                 pass
+            elif method == "ping":
+                reply(mid, {})
             elif method == "tools/list":
                 reply(mid, {"tools": TOOLS})
             elif method == "tools/call":
